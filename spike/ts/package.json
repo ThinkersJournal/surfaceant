@@ -1,0 +1,1 @@
+{"name":"spike-ts","private":true,"version":"0.0.0","type":"module","scripts":{"typecheck":"tsc --noEmit","test":"vitest run"},"devDependencies":{"@cloudflare/vitest-plugin":"^1.4.11","@cloudflare/workers-types":"^5.20261031.1","typescript":"^7.0.2","vitest":"^5.0.5","wrangler":"^4.156.0"}}
