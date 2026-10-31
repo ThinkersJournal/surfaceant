@@ -1,14 +1,19 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::StreamExt;
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use worker::*;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let url = req.url()?;
-    let id = url
-        .path_segments()
-        .and_then(|mut s| s.nth(1))
-        .filter(|s| !s.is_empty());
+    let mut seg = url.path_segments().into_iter().flatten();
+    // /check/* (second-spike probes) all share one object; /hooks/<id> and /connect/<id> use <id>.
+    let id = match seg.next() {
+        Some("check") => Some("check"),
+        _ => seg.next().filter(|s| !s.is_empty()),
+    };
     let Some(id) = id else {
         return Ok(Response::empty()?.with_status(404));
     };
@@ -58,6 +63,10 @@ impl DurableObject for Channel {
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let url = req.url()?;
+        if url.path().starts_with("/check/") {
+            return self.check(&mut req, &url).await;
+        }
         let sql = self.state.storage().sql();
         if req.headers().get("Upgrade")?.as_deref() == Some("websocket") {
             let pair = WebSocketPair::new()?;
@@ -91,6 +100,13 @@ impl DurableObject for Channel {
         Ok(Response::empty()?.with_status(202))
     }
 
+    async fn alarm(&self) -> Result<Response> {
+        let sql = self.state.storage().sql();
+        sql.exec("CREATE TABLE IF NOT EXISTS fired (n INTEGER)", None)?;
+        sql.exec("INSERT INTO fired VALUES (1)", None)?;
+        Response::empty()
+    }
+
     async fn websocket_message(
         &self,
         _ws: WebSocket,
@@ -115,5 +131,69 @@ impl DurableObject for Channel {
         _clean: bool,
     ) -> Result<()> {
         Ok(())
+    }
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+impl Channel {
+    /// Second-spike checks: HMAC-SHA-256 verify, alarms, capped streaming body read.
+    async fn check(&self, req: &mut Request, url: &Url) -> Result<Response> {
+        let q: std::collections::HashMap<String, String> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        match url.path() {
+            "/check/hmac" => {
+                let mut mac = Hmac::<Sha256>::new_from_slice(q["key"].as_bytes())
+                    .map_err(|e| Error::from(e.to_string()))?;
+                mac.update(q["msg"].as_bytes());
+                let expected = unhex(&q["mac"]).unwrap_or_default();
+                // verify_slice compares in constant time (subtle::ConstantTimeEq).
+                let ok = mac.verify_slice(&expected).is_ok();
+                Ok(Response::empty()?.with_status(if ok { 200 } else { 401 }))
+            }
+            "/check/alarm-set" => {
+                self.state
+                    .storage()
+                    .set_alarm(std::time::Duration::from_millis(100))
+                    .await?;
+                Response::empty()
+            }
+            "/check/alarm-fired" => {
+                let sql = self.state.storage().sql();
+                sql.exec("CREATE TABLE IF NOT EXISTS fired (n INTEGER)", None)?;
+                let n = sql
+                    .exec("SELECT COUNT(*) FROM fired", None)?
+                    .raw()
+                    .next()
+                    .ok_or("no row")??;
+                let SqlStorageValue::Integer(n) = n[0] else {
+                    return Err("bad count".into());
+                };
+                Response::ok(n.to_string())
+            }
+            "/check/capped" => {
+                let max: usize = q["max"].parse().map_err(|_| Error::from("bad max"))?;
+                let mut total = 0usize;
+                let mut stream = req.stream()?;
+                while let Some(chunk) = stream.next().await {
+                    total += chunk?.len();
+                    if total > max {
+                        return Ok(Response::empty()?.with_status(413)); // stop reading; the rest is never buffered
+                    }
+                }
+                Response::ok(total.to_string())
+            }
+            _ => Ok(Response::empty()?.with_status(404)),
+        }
     }
 }

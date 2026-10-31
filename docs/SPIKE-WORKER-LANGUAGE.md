@@ -33,16 +33,29 @@ Not Cloudflare production numbers: the latency rows are wall time through `wrang
 ~15 ms of proxy overhead in every request), so they say "no visible difference locally", not what CPU time is billed or limited
 on Cloudflare. **Production cold start and CPU time, and the Free-plan script-size limit against 161 KiB gzip: UNVERIFIED.**
 
-## What the spike did not cover (UNVERIFIED, needed for the real Worker)
+## Second spike: the three open items (2026-10-31)
 
-- HMAC-SHA-256 and constant-time comparison from Rust in wasm: via `web-sys` `SubtleCrypto`, or the pure-Rust `hmac` + `sha2` +
-  `subtle` crates (adds size; `getrandom` needs its `js` backend). Not built.
-- Durable Object **alarms** in Rust: the `alarm` trait method exists (`durable.rs`); not run.
-- Reading a request body with a hard size cap while streaming: `Request::bytes()` buffers whole; a capped stream reader from Rust
-  was not tried.
-- Tests: **the Rust Worker is still tested through vitest/wrangler (Node)**, so the Node toolchain stays in CI either way; Rust
-  only removes TypeScript from the production code. Pure logic (ids, framing, caps) could also be unit-tested with plain
-  `cargo test` on the host if it lives in a non-wasm crate.
+Added to `spike/rust` (`Channel::check`, routes under `/check/`), tested in `spike/rust/test/spike.test.ts` (tests 3-5). Command for all
+three: `cd spike/rust && worker-build --release && npx vitest run` -> **5 passed (5)**. New crates: `hmac` 0.13.0, `sha2` 0.11.1,
+`subtle` 2.6.1, `futures-util` 0.3.34. After adding them: bundle **507.91 KiB / 173.39 KiB gzip** (was 472.45 / 160.89, so crypto cost
+about 35 KiB raw / 12.5 KiB gzip); `cargo audit` 0 vulnerabilities over 96 crates; 122 distinct crate versions in the wasm32 tree.
+
+| Item | Result | Evidence |
+|---|---|---|
+| HMAC-SHA-256 + constant-time compare in wasm | **PASS** | Pure-Rust `hmac`+`sha2`; `Mac::verify_slice` (constant-time, via `subtle`). Test: RFC 4231 test case 2 (key `Jefe`, data `what do ya want for nothing?`, MAC `5bdcc146...ec3843`) verifies 200; one changed message char, one changed MAC nibble, and non-hex MAC all give 401 (the negative controls). No `getrandom` was needed: verification needs no randomness. **Channel-id generation does** (random bytes); use the Workers `crypto.getRandomValues` through `getrandom` with its wasm-js backend, or generate ids in the admin path through `web-sys` `Crypto`: **not built, UNVERIFIED** |
+| DO alarms in Rust | **PASS** | `DurableObject::alarm` + `State::storage().set_alarm(Duration)` (100 ms offset). Test: `alarm-fired` count 0 -> set -> wait 600 ms -> 1. Also confirmed under real `wrangler dev` (handler entered, `rows_written` 1). `get_alarm`/`delete_alarm` exist but were not run |
+| Capped streaming body reader | **PASS** | `Request::stream()` (`ByteStream`, a `futures` `Stream`) read chunk by chunk, abort at the cap. Test: 4096 B under a 4096 cap -> 200 and "4096"; a 5 MiB chunked body with no `Content-Length` -> 413 (the reader returns at the cap, the rest is not buffered) |
+
+My first run of the alarm test **failed**; the cause was my probe, not workers-rs: the entry point routed `/check/alarm-set` and
+`/check/alarm-fired` to two different Durable Objects (it keys on the second path segment). Established by logging inside the handler
+under `wrangler dev` (handler ran, insert wrote 1 row, the read hit another object), then routing all `/check/*` to one object.
+
+Still **UNVERIFIED** (none blocks the choice): production CPU/cold start on Cloudflare; the Free-plan script-size limit against 173 KiB
+gzip; secure random in wasm for id generation; frame types compiled into the client crate; a serde-decoded BLOB column.
+
+Tests: **the Rust Worker is still tested through vitest/wrangler (Node)**, so the Node toolchain stays in CI either way; Rust only
+removes TypeScript from the production code. Pure logic (ids, framing, caps) can also be unit-tested with host `cargo test` if it
+lives in a non-wasm crate.
 
 ## Reading the numbers
 
@@ -55,8 +68,8 @@ on Cloudflare. **Production cold start and CPU time, and the Free-plan script-si
 
 ## Recommendation
 
-**Rust (workers-rs)**, conditional on a first-hour check in row 2 of the three UNVERIFIED items above (crypto, alarm, capped body).
-CireSnave prefers Rust, the spike found no functional gap, and the shared protocol crate removes a drift risk between Worker and
-client. If any of the three fails in practice, fall back to TypeScript for the Worker (the wire protocol and test vectors are
-language-neutral, so the client and the design do not change). Costs to accept: roughly 470 KiB of artifact per deploy, a
+**Rust (workers-rs)**. All three conditions passed (second spike). CireSnave prefers Rust, no functional gap was found, and the
+shared protocol crate removes a drift risk between Worker and client. If a later gap appears (the remaining UNVERIFIED items),
+fall back to TypeScript for the Worker (the wire protocol and test vectors are
+language-neutral, so the client and the design do not change). Costs to accept: roughly 500 KiB (173 KiB gzip) of artifact per deploy, a
 15-second release-profile loop (use the dev profile while iterating), and a pre-1.0 SDK (`worker` 0.8.x) whose API may move.
