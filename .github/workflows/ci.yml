@@ -81,6 +81,38 @@ jobs:
       - run: worker-build --release
       - run: npx vitest run
 
+  e2e:
+    name: e2e (relay + client + receiver)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - run: cargo install worker-build --version 0.9.0 --locked
+      - run: npm ci && worker-build --release
+        working-directory: worker
+      - name: start the relay (wrangler dev) with throwaway test secrets
+        working-directory: worker
+        run: |
+          nohup npx wrangler dev --port 8791 --var CHANNEL_KEY:ci-channel-key --var ADMIN_SECRET:ci-admin-secret > ../wrangler-dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8791/nope || true)
+            [ "$code" = 404 ] && exit 0
+            sleep 1
+          done
+          cat ../wrangler-dev.log
+          exit 1
+      - name: client end to end (fails on the first failed check)
+        run: cargo run -p surfaceant-client --example e2e
+        env:
+          E2E_RELAY: 127.0.0.1:8791
+          E2E_ADMIN_SECRET: ci-admin-secret
+
   deny:
     name: cargo deny (advisories, licences, bans, sources)
     runs-on: ubuntu-latest
