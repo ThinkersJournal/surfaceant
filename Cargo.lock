@@ -511,18 +511,18 @@ dependencies = [
 
 [[package]]
 name = "surfaceant"
-version = "0.0.3"
+version = "0.0.4"
 
 [[package]]
 name = "surfaceant-client"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "surfaceant-proto",
 ]
 
 [[package]]
 name = "surfaceant-proto"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "serde",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "surfaceant-worker"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "getrandom",
  "serde",
