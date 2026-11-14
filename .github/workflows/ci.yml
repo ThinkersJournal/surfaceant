@@ -33,7 +33,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -47,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-      - run: cargo test --all-features --no-fail-fast
+      - run: cargo test --workspace --all-features --no-fail-fast
 
   doc:
     name: doc
@@ -59,7 +59,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-      - run: cargo doc --no-deps --all-features
+      - run: cargo doc --workspace --no-deps --all-features
+
+  worker:
+    name: worker (wasm build + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - run: cargo install worker-build --version 0.9.0 --locked
+      - run: npm ci
+      - run: worker-build --release
+      - run: npx vitest run
 
   deny:
     name: cargo deny (advisories, licences, bans, sources)

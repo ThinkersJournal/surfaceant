@@ -73,3 +73,16 @@ shared protocol crate removes a drift risk between Worker and client. If a later
 fall back to TypeScript for the Worker (the wire protocol and test vectors are
 language-neutral, so the client and the design do not change). Costs to accept: roughly 500 KiB (173 KiB gzip) of artifact per deploy, a
 15-second release-profile loop (use the dev profile while iterating), and a pre-1.0 SDK (`worker` 0.8.x) whose API may move.
+
+## Ruling and verification of the four open items (2026-11-14)
+
+CireSnave ruled on board item 438 (2026-11-14, verbatim: "438: A, A."): the Worker is **Rust (workers-rs)** and the 2026-11-01
+hold is lifted for the SurfaceAnt Worker. The PM's task asked that the four items left UNVERIFIED above be settled first.
+Now on `worker` 0.9.0 and `worker-build` 0.9.0 (the spike used 0.8.7), `getrandom` 0.4.3, rustc 1.100.0, wrangler 4.x, vitest 5.1.0.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Secure random for channel ids in wasm | **PASS** | `worker/src/lib.rs` `random_id()` uses `getrandom::fill` (feature `wasm_js`, no extra `--cfg`); `worker/test/random.test.ts` calls it 64 times inside the Workers runtime: each result is 32 hex digits, all 64 distinct, none all-zero. `cd worker && worker-build --release && npx vitest run` -> 2 passed. |
+| Frame types compiled into the client crate | **PASS** | `crates/surfaceant-proto` (serde frames) is a dependency of `surfaceant-client`; `cargo test -p surfaceant-proto -p surfaceant-client` passes on the host (5 + 1 tests: every frame round-trips, non-UTF-8 and trailing-newline bodies byte-identical, header order and duplicates kept, unknown frame / bad JSON / bad base64 rejected). `cargo build -p surfaceant-proto -p surfaceant-client --target wasm32-unknown-unknown` also succeeds. The Worker crate does not depend on `surfaceant-proto` yet (that arrives with the Durable Object). |
+| Free-plan size limit vs the bundle | **PASS (by documentation)** | Bundle with 0.9.0 and the random probe: `wrangler deploy --dry-run` "Total Upload: 408.29 KiB / gzip: 143.86 KiB". The Workers limits page (read 2026-11-14, shown "Last updated Nov 13, 2026") lists "Worker size (uncompressed)" as 64 MiB on Free and Paid and says "There is no compressed size limit". The same page gives startup time 1 s and CPU time per HTTP request 10 ms on Free. The Durable Object limits page was not read. |
+| Production CPU and cold start | **UNVERIFIED, needs a deploy** | Can only be measured on Cloudflare, i.e. ROADMAP row 4, which needs a scoped token from CireSnave via the PM. Local wall time showed no difference (above); the Free 10 ms CPU limit is the number to measure against. Not a failure, not a reason to fall back. |

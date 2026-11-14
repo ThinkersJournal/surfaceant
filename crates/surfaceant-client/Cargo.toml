@@ -1,0 +1,12 @@
+[package]
+name = "surfaceant-client"
+description = "SurfaceAnt client (skeleton: decodes relay frames; no connection logic yet)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+surfaceant-proto = { path = "../surfaceant-proto" }
