@@ -606,18 +606,18 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surfaceant"
-version = "0.0.4"
+version = "0.0.5"
 
 [[package]]
 name = "surfaceant-client"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "surfaceant-proto",
 ]
 
 [[package]]
 name = "surfaceant-proto"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "base64",
  "serde",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "surfaceant-worker"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "futures-util",
  "getrandom",
