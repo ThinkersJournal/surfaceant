@@ -9,4 +9,15 @@ repository = "https://github.com/ThinkersJournal/surfaceant"
 readme = "README.md"
 publish = false
 
+[workspace]
+members = ["crates/surfaceant-proto", "crates/surfaceant-client", "worker"]
+
+[workspace.package]
+version = "0.0.3"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ThinkersJournal/surfaceant"
+publish = false
+
 [dependencies]
