@@ -1,6 +1,16 @@
 # SurfaceAnt design note (events mode)
 
-Status: proposal for PM review. Options first, then a recommendation. No code.
+Status: **amended 2026-11-14** after the rulings below; the options text is kept as the record of why. Amendments are marked
+**[Amended]**.
+
+**Rulings that supersede the original recommendation:**
+- **Worker language: Rust (workers-rs)**, CireSnave 2026-11-14 on board 438 (verbatim: "438: A, A."). The TypeScript recommendation
+  in 2.1 and section 7 is superseded; the spike (`docs/SPIKE-WORKER-LANGUAGE.md`) is the evidence. The wire frames are one
+  shared crate, `surfaceant-proto`.
+- Q2 (PM): channels are admin-provisioned in v1. Q3 (PM): the channel id is `rand || HMAC` (key = Worker secret `CHANNEL_KEY`),
+  so an unknown or forged id gets `404` without touching a Durable Object. Q4 (PM): the caps in section 4 are Worker vars
+  (`MAX_BODY_BYTES`, `BUFFER_TTL_SECONDS`, `BUFFER_MAX_EVENTS`, `BUFFER_MAX_BYTES`, `RATE_PER_SEC`, `RATE_BURST`, `WINDOW`) with
+  the defaults shown there.
 
 ## 1. What events mode must do
 
@@ -63,7 +73,7 @@ Node CI job; CireSnave's "latest versions of dependencies" rule applies to it as
 
 Two separate secrets per channel, because the channel id is in a URL that senders (and their logs) see:
 
-1. **Channel id** - 128-bit random, URL-safe, in the path. Knowing it lets you *post*, nothing else. (GitHub also signs, and
+1. **Channel id** - **[Amended]** 64 hex digits: 128 random bits followed by the first 128 bits of `HMAC-SHA-256(CHANNEL_KEY, "surfaceant/channel-id/v1" || random)`, in the path. Knowing it lets you *post*, nothing else. (GitHub also signs, and
    the client's program verifies, so a forged post is rejected downstream; the relay's only job is to keep abuse cheap.)
 2. **Connection token** - 256-bit random, sent by the client as `Authorization: Bearer` on the WebSocket upgrade (never in the
    URL, which gets logged). The relay stores only `SHA-256(token)` and compares in constant time
@@ -76,8 +86,8 @@ channel id + token once. Self-service signup is mode-2 / public-service work and
 
 At-least-once, ordered per channel, idempotent by delivery id.
 
-- The relay derives `delivery_id` from `X-GitHub-Delivery` when present, else from `SHA-256(body)` plus the channel's
-  generic `X-Delivery-Id` / `Idempotency-Key` header if one exists, else a fresh UUID. A repeat of a stored id is answered `200`
+- **[Amended]** The relay derives `delivery_id` from `X-GitHub-Delivery` when present, else the generic `X-Delivery-Id` / `Idempotency-Key`
+  header, else a fresh random id (hashing the body would drop legitimate repeats of an identical payload). A repeat of a stored id is answered `200`
   and **not** stored again. The client also remembers recent ids, and `gh_webhook_receiver.py` already de-duplicates, so
   duplicates are tolerated end to end.
 - The relay answers the sender `202` once the event is **durably written** (not when the client acks), so senders do not retry
@@ -87,12 +97,12 @@ At-least-once, ordered per channel, idempotent by delivery id.
 
 ## 3. Wire protocol (proposal)
 
-WebSocket text frames, one JSON object each, `v` = 1.
+WebSocket text frames, one JSON object each, tagged `"type"`. **[Amended]** The version `v` (= 1) travels in `hello` and `welcome` only; the relay answers a `hello` with another `v` by `error{code:"unsupported_version"}`.
 
 | Direction | Frame | Fields |
 |---|---|---|
 | C -> R | `hello` | `v`, `last_acked_seq` |
-| R -> C | `welcome` | `v`, `max_event_bytes`, `ttl_seconds`, `server_time` |
+| R -> C | `welcome` | `v`, `max_event_bytes`, `ttl_seconds`, `server_time`, `dropped_events` (**[Amended]**: events dropped at the buffer cap since the last `welcome`) |
 | R -> C | `event` | `seq`, `delivery_id`, `received_at`, `method`, `path_suffix`, `query`, `headers` (array of `[name, value]`), `body_b64` |
 | C -> R | `ack` | `seq` (cumulative) |
 | both | `ping` / `pong` | (also WebSocket-level auto-response so hibernation is not woken) |

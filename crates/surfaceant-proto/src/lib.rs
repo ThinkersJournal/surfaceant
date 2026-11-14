@@ -32,6 +32,9 @@ pub enum Frame {
         ttl_seconds: u64,
         /// The relay's clock, RFC 3339.
         server_time: String,
+        /// Events dropped (oldest first) because the buffer cap was hit since the last `welcome`.
+        #[serde(default)]
+        dropped_events: u64,
     },
     /// Relay to client: one forwarded request.
     Event(Event),
@@ -153,6 +156,7 @@ mod tests {
                 max_event_bytes: 1 << 20,
                 ttl_seconds: 86_400,
                 server_time: "2026-11-14T00:00:00Z".into(),
+                dropped_events: 3,
             },
             Frame::Event(sample().with_body(b"x")),
             Frame::Ack { seq: 7 },
