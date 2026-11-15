@@ -2,6 +2,9 @@
   "name": "surfaceant-worker",
   "main": "build/worker/shim.mjs",
   "compatibility_date": "2026-10-01",
+  // Routes are passed by deploy/deploy.sh (thinkersjournal.net/hooks|connect|admin/*); no public workers.dev URL.
+  "workers_dev": false,
+  "observability": { "enabled": true },
   "build": { "command": "worker-build --release" },
   "durable_objects": { "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
