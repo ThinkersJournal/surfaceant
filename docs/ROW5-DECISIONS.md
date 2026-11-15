@@ -21,7 +21,7 @@ What the relay is exposed to: anyone who learns a channel id can POST up to 1 Mi
 local program; the relay stores up to 24 h / 1000 events / 64 MiB per channel; it can host unwanted content only transiently.
 Forged ids cost no storage (they 404 before reaching a Durable Object).
 - **A (recommended):** no content scanning (we do not read payloads); the remedy is disabling the channel
-  (`POST /admin/channels/<id>/disable`, immediate and audited by the PM), on a report to the abuse address or on sight of abuse
+  (`POST /admin/channels/<id>/disable`: immediate, sockets closed, no further events accepted), on a report to the abuse address or on sight of abuse
   by rate; a reporter's note is kept with the disable decision. Illegal-content reports (CSAM and the like) follow the existing
   ThinkersJournal reporting pipeline (board 119) rather than a new one.
 - B: scan payloads (costly, and conflicts with item 4's "we do not read your data").
@@ -31,8 +31,8 @@ The relay sees every payload in clear (TLS terminates at Cloudflare) and holds i
 24 h; it keeps no body after that. Cloudflare's own request metadata and Worker logs exist while observability is on
 (`wrangler.jsonc`).
 - **A (recommended):** say so plainly in the notice: the operator and Cloudflare can read in-flight and buffered payloads;
-  we never log bodies; metadata logs (time, channel id, status, size) kept 7 days then dropped; disabling a channel deletes
-  its buffer. End-to-end encryption between sender and client is not offered (it cannot work for GitHub-style senders that
+  we never log bodies; metadata logs (time, channel id, status, size) kept 7 days then dropped; disabling a channel stops
+  delivery at once, and its buffer is dropped at the 24 h limit (deleting it on disable is a small Worker change if wanted). End-to-end encryption between sender and client is not offered (it cannot work for GitHub-style senders that
   sign plaintext) and is documented as a non-goal.
 - B: turn Worker logging off entirely (loses the CPU/error visibility row 4 relies on).
 
