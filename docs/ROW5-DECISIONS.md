@@ -44,6 +44,8 @@ The relay sees every payload in clear (TLS terminates at Cloudflare) and holds i
 - B: no separate terms; the privacy notice and abuse policy only (weaker: nothing to enforce suspension against).
 
 ## 6. Cost ceiling (decision, not a design question)
+*On the board: items 1-5 are board 447; item 6 is board 445 (with the deploy).*
+
 The Workers Free plan caps CPU at 10 ms per request and requests per day; row 4 measures real CPU. If p99 is close to the cap
 or traffic outgrows the daily request quota the relay needs the Paid plan (about a flat monthly fee plus usage).
 - **A (recommended):** deploy on Free, review after the first week of real numbers; upgrade only on evidence.

@@ -24,7 +24,7 @@ pub use surfaceant_proto::{DecodeError, Event, Frame, PROTOCOL_VERSION};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// What the client needs to run.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Relay base, `wss://host` (or `ws://host:port` for a local relay).
     pub relay: String,
@@ -34,6 +34,18 @@ pub struct Config {
     pub token: String,
     /// Local program, `http://host:port` plus an optional base path; events are replayed under it.
     pub target: String,
+}
+
+impl std::fmt::Debug for Config {
+    /// The connection token is a credential: it is never printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("relay", &self.relay)
+            .field("channel_id", &self.channel_id)
+            .field("token", &"<redacted>")
+            .field("target", &self.target)
+            .finish()
+    }
 }
 
 /// Why a session ended.
@@ -324,6 +336,19 @@ mod tests {
             body_b64: String::new(),
         }
         .with_body(b"\xff\x00raw")
+    }
+
+    #[test]
+    fn config_debug_never_prints_the_token() {
+        let cfg = Config {
+            relay: "wss://relay".into(),
+            channel_id: "chan".into(),
+            token: "s3cret-token".into(),
+            target: "http://127.0.0.1:1".into(),
+        };
+        let shown = format!("{cfg:?}");
+        assert!(!shown.contains("s3cret-token"), "{shown}");
+        assert!(shown.contains("chan") && shown.contains("<redacted>"));
     }
 
     #[test]
