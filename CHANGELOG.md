@@ -2,6 +2,11 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.12
+
+- relay: buffer TTL 24 h -> 5 minutes (`BUFFER_TTL_SECONDS` = 300; board 447). **Behaviour change:** an event for an offline service is dropped after 5 minutes; an online service still receives it at once.
+- README rewritten: no longer a placeholder; states "built, not deployed, UNVERIFIED live".
+
 ## 0.0.11
 
 - client: `Config` no longer prints its connection token through `Debug` (CodeRipper SEC-012); test added.
