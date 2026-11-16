@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { env, runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

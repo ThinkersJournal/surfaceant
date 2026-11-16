@@ -137,6 +137,7 @@ struct Attachment {
     hello: bool,
 }
 
+/// One channel: its token hash, buffered events, connected client and rate limiter, in a SQLite-backed Durable Object.
 #[durable_object]
 pub struct Channel {
     state: State,
