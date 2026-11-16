@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.14
+
+- docs: board 447 rulings recorded (`docs/ROW5-DECISIONS.md`), draft notice and terms (`docs/NOTICE-AND-TERMS.md`), subdomain design note with options A/B/C (`docs/DESIGN-SUBDOMAINS.md`); ROADMAP row 5 -> review.
+
 ## 0.0.13
 
 - relay: optional per-service abuse contact on channel provisioning (`POST /admin/channels` body `{"abuse_contact": email-or-https-url}`), read back with admin-only `GET /admin/channels/<id>`; malformed is 400 (board 447).
