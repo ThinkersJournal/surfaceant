@@ -65,4 +65,40 @@ per-service opt-in, size and time limits, no cookies upward) written down first.
 needing its own ruling. Needs from other lanes: the Community lane for the sign-in assertion and `[[LEGAL_ENTITY]]`; the
 PM for the DNS zone and the Public Suffix List request (an external submission, made only on CireSnave's word).
 
+## Nested names and where TLS ends
+
+CireSnave asked (2026-11-16) how a user could get TLS for a nested name such as `mail.<user>.thinkersjournal.net` when a
+visitor's TLS ends at Cloudflare. Facts first, each marked **verified** (read on the page cited, dated as shown on it) or
+**UNVERIFIED**.
+
+### Facts
+| Fact | Status | Source |
+|---|---|---|
+| A DNS wildcard is multi-level: `*.example.com` covers `abc.example.com` and `123.abc.example.com`; only the first label may be `*`; an exact record at a name overrides the wildcard below it. | verified | [Wildcard DNS records](https://developers.cloudflare.com/dns/manage-dns-records/reference/wildcard-dns-records/) (updated 2026-04-16) |
+| Universal SSL covers the apex and first-level subdomains only; `a.b.example.com` is "not covered and will not serve a valid certificate" on a full setup. | verified | [Universal SSL limitations](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/) (2026-10-09) |
+| Advanced Certificate Manager (ACM): up to 50 hosts per certificate (apex counts as one); a wildcard covers one level only, so `*.<user>.thinkersjournal.net` is a certificate of its own, and a deeper level needs another. | verified | [ACM](https://developers.cloudflare.com/ssl/edge-certificates/advanced-certificate-manager/) (2026-08-14) |
+| ACM costs "starting at $10 per month" per zone on Free, Pro and Business. | verified from Cloudflare's plans page and launch post as returned by search; the docs pages themselves state no price, so **re-read the plans page before committing money** | [Plans](https://www.cloudflare.com/en-gb/plans/), [launch post](https://blog.cloudflare.com/advanced-certificate-manager/) |
+| Cloudflare for SaaS: 100 custom hostnames included, $0.10 each after, up to 50,000, on Free, Pro and Business; **wildcard custom hostnames are Enterprise only**. | verified | [Plans](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/) (2026-08-14) |
+| A Workers route `*.thinkersjournal.net/*` matches multi-label hosts such as `a.b.thinkersjournal.net`. | **UNVERIFIED.** The route doc says `*` matches "zero or more of any character" and gives `*.sub.example.com/*` matching `foo.sub.example.com`, which implies it, but no page says it of a multi-label host. Test on a scratch name (a `scratch-<n>.thinkersjournal.net` route to a test Worker, request `a.b.scratch-<n>...`, record the result here, remove the route) before relying on it. | [Routes](https://developers.cloudflare.com/workers/configuration/routing/routes/) (2026-10-18) |
+| `_acme-challenge` is a DNS TXT name (`_acme-challenge.<host>`), not an HTTP path. | from the ACME specification (RFC 8555), not re-read today | |
+| HTTP-01 proves control of one named host by serving a token at `/.well-known/acme-challenge/<token>` on port 80, so it can be answered through a relay for a single named host, but a CA never issues a wildcard on HTTP-01; a wildcard needs DNS-01. | from RFC 8555 and the CA/Browser Forum rules, not re-read today | |
+| Cloudflare offers SNI/TLS passthrough for HTTPS on the Free plan. | **not stated on any page read.** Spectrum is "available on Paid plans"; custom TCP/UDP applications need Enterprise plus the Spectrum add-on; Universal SSL is incompatible with Spectrum. | [Spectrum](https://developers.cloudflare.com/spectrum/) (2026-04-23) |
+
+### Options
+| | (a) One label + paths | (b) Cloudflare ACM or Cloudflare for SaaS | (c) Our own SNI-passthrough edge | (d) Per-user NS delegation |
+|---|---|---|---|---|
+| What the user gets | `<user>.thinkersjournal.net/mail/`; nested services are paths | `mail.<user>...` with a certificate per user: ACM `*.<user>...` at about $10/month per zone, or SaaS custom hostnames | Any name under `<user>.`; the user's software terminates TLS | The user's whole subtree on their own nameservers |
+| Cost | none beyond the Universal SSL we have | ACM: about $10/month per zone, 50 hosts per certificate and one wildcard per level, so each user's `*.<user>...` takes one of a certificate's 50 slots (inference: about 49 users per certificate; the per-zone certificate cap on Free to Business is not stated on the pages read). ThinkersJournal pays. SaaS: first 100 hostnames free, then $0.10 each, no wildcard under Free to Business | Hosting and operating a public edge (below) | Free to us, hard to support |
+| Who holds the keys | Cloudflare (edge) | Cloudflare | **The user, never leaves their machine**; certificate via an ACME-DNS-style API on our side (DNS-01, so wildcards work) or HTTP-01 through the passthrough | The user |
+| Abuse control | Full: HTTP is visible, per-path rules and disable-at-once | Full at Cloudflare's edge, same as (a) | **Connection level only** (SNI, rate, bytes, disable by name); we cannot see or filter content, so board 447's "disable a channel at once" still works but content rules do not | Almost none; the user leaves our zone and policy |
+| What we run | Nothing new | Certificate orders and renewal, per-user records | A new always-on TCP edge (not a Worker: a Worker cannot take a raw TLS stream; it would run on a small VM or container host with a public IP) with SNI routing to each user's connected client, and the ACME-DNS service. Capacity is connections held open, not requests, and bytes relayed: an estimate and a load test are needed before launch (no figure measured here) | Per-user NS records (a record-count cap applies per zone), and users need a public IP |
+| Fit with this design | Fits today's relay: the channel is already the unit | Fits, but cost grows with users | Large new component; defers surface mode's HTTP rules (the edge never reads HTTP) | Leaves Cloudflare, not recommended |
+
+### Recommendation
+**First launch is (a): one label, `<user>.thinkersjournal.net`, nested services as paths.** It needs no new certificate, no
+passthrough and no money, and it keeps the abuse controls we ruled on. Treat (b) as the paid upgrade if users ask for nested
+names and CireSnave accepts per-zone cost; test the Workers wildcard route first (the UNVERIFIED row). Keep (c) as a later design
+of its own, because it is the only option where the user's keys never leave their machine, and it needs its own ruling on the
+loss of content-level abuse control and on who runs the edge. Do not do (d).
+
 -- lane: surfaceant
