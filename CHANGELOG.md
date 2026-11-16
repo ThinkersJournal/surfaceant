@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.15
+
+- client: select the rustls `ring` crypto provider explicitly, so a `wss://` connection no longer panics (found by the live smoke run); test added. DEPLOY.md: secret custody and rotation, TLS note, CPU is read from the dashboard. docs: DESIGN-SUBDOMAINS.md gains "Nested names and where TLS ends" (facts marked verified/UNVERIFIED, options a-d, recommendation).
+
 ## 0.0.14
 
 - docs: board 447 rulings recorded (`docs/ROW5-DECISIONS.md`), draft notice and terms (`docs/NOTICE-AND-TERMS.md`), subdomain design note with options A/B/C (`docs/DESIGN-SUBDOMAINS.md`); ROADMAP row 5 -> review.
