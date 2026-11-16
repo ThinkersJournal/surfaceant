@@ -56,6 +56,28 @@ describe("provisioning and ids", () => {
     expect((await SELF.fetch(`${BASE}/admin/channels`, { method: "POST", headers: bad })).status).toBe(401);
   });
 
+  it("a service's own abuse contact is stored, echoed, and readable by the admin; a bad one is 400", async () => {
+    const mk = (body: string) =>
+      SELF.fetch(`${BASE}/admin/channels`, { method: "POST", headers: ADMIN, body });
+    const r = await mk(JSON.stringify({ abuse_contact: "abuse@service.example" }));
+    expect(r.status).toBe(201);
+    const made = (await r.json()) as { channel_id: string; abuse_contact: string | null };
+    expect(made.abuse_contact).toBe("abuse@service.example");
+    const info = await SELF.fetch(`${BASE}/admin/channels/${made.channel_id}`, { headers: ADMIN });
+    expect(await info.json()).toEqual({ abuse_contact: "abuse@service.example", disabled: false });
+    expect((await SELF.fetch(`${BASE}/admin/channels/${made.channel_id}`)).status).toBe(401);
+    // none given: still provisioned (the ThinkersJournal-wide contact applies), and reads back null
+    const bare = await provision();
+    const bareInfo = await SELF.fetch(`${BASE}/admin/channels/${bare.channel_id}`, { headers: ADMIN });
+    expect(await bareInfo.json()).toEqual({ abuse_contact: null, disabled: false });
+    for (const bad of ['{"abuse_contact":"nope"}', '{"abuse_contact":5}', "not json"]) {
+      expect((await mk(bad)).status).toBe(400);
+    }
+    await SELF.fetch(`${BASE}/admin/channels/${made.channel_id}/disable`, { method: "POST", headers: ADMIN });
+    const after = await SELF.fetch(`${BASE}/admin/channels/${made.channel_id}`, { headers: ADMIN });
+    expect(((await after.json()) as { disabled: boolean }).disabled).toBe(true);
+  });
+
   it("unknown, forged and malformed ids are 404 with an empty body", async () => {
     const { channel_id } = await provision();
     const forged = channel_id.slice(0, 63) + (channel_id.endsWith("0") ? "1" : "0");
