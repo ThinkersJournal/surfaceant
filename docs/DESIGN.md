@@ -127,6 +127,7 @@ WebSocket text frames, one JSON object each, tagged `"type"`. **[Amended]** The 
 | Buffer cap per channel | 1,000 events or 64 MiB, oldest-first drop with a counter surfaced in the next `welcome` | An offline client must not fill storage |
 | Rate limit | per-channel token bucket in the DO, e.g. 10 req/s burst 50 -> `429` + `Retry-After` | DO is already the serialisation point, so no extra service |
 | Disable | `POST /admin/channels/<id>/disable` flips a flag; disabled channels answer `410` and drop the socket | Required by the brief |
+| Abuse contact | `POST /admin/channels` takes an optional JSON body `{"abuse_contact": "<email or https URL>"}`, stored per channel and read back with `GET /admin/channels/<id>` (`{abuse_contact, disabled}`); a malformed one is `400` | Each surfaced service lists its own contact in addition to ThinkersJournal's (board 447); absent means the ThinkersJournal-wide one applies |
 | Methods | POST only on `/hooks/<id>`; others `405` | |
 | Logging | status + channel id hash + size only; never bodies or headers | Brief |
 | Unknown channel | `404`, same response time as a disabled one is not required but body is empty | Do not confirm which ids exist |

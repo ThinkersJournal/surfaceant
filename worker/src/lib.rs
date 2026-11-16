@@ -75,7 +75,7 @@ fn admin_ok(req: &Request, env: &Env) -> Result<bool> {
 }
 
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let url = req.url()?;
     let segs: Vec<&str> = url.path_segments().map(|s| s.collect()).unwrap_or_default();
     let key = secret(&env, "CHANNEL_KEY").unwrap_or_default();
@@ -103,18 +103,51 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
             let id = logic::make_channel_id(key.as_bytes(), random_bytes()?);
             let token = logic::hex(&random_bytes::<32>()?);
+            // Optional JSON body {"abuse_contact": "..."}: this service's own abuse contact (board 447).
+            let raw = req.text().await.unwrap_or_default();
+            let abuse_contact = if raw.trim().is_empty() {
+                None
+            } else {
+                let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+                    Ok(v) => v,
+                    Err(_) => return status(400),
+                };
+                match parsed.get("abuse_contact") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::String(s)) if logic::abuse_contact_is_valid(s) => {
+                        Some(s.trim().to_string())
+                    }
+                    Some(_) => return status(400),
+                }
+            };
             let mut init = RequestInit::new();
-            init.with_method(Method::Post)
-                .with_body(Some(logic::hash_token(&token).into()));
+            init.with_method(Method::Post).with_body(Some(
+                serde_json::json!({
+                    "token_hash": logic::hash_token(&token),
+                    "abuse_contact": abuse_contact,
+                })
+                .to_string()
+                .into(),
+            ));
             let r = Request::new_with_init("https://channel/init", &init)?;
             let resp = stub(&env, &id)?.fetch_with_request(r).await?;
             if resp.status_code() != 201 {
                 return status(500);
             }
             Ok(
-                Response::from_json(&serde_json::json!({"channel_id": id, "token": token}))?
+                Response::from_json(&serde_json::json!({"channel_id": id, "token": token, "abuse_contact": abuse_contact}))?
                     .with_status(201),
             )
+        }
+        (["admin", "channels", id], Method::Get) => {
+            if !admin_ok(&req, &env)? {
+                return status(401);
+            }
+            if key.is_empty() || !logic::channel_id_is_valid(key.as_bytes(), id) {
+                return status(404);
+            }
+            let r = Request::new("https://channel/info", Method::Get)?;
+            stub(&env, id)?.fetch_with_request(r).await
         }
         (["admin", "channels", id, "disable"], Method::Post) => {
             if !admin_ok(&req, &env)? {
@@ -478,9 +511,25 @@ impl DurableObject for Channel {
             if self.meta_get("token_hash")?.is_some() {
                 return status(409);
             }
-            let hash = req.text().await?;
+            let init: serde_json::Value = serde_json::from_str(&req.text().await?)?;
+            let hash = init["token_hash"].as_str().unwrap_or_default();
+            if hash.is_empty() {
+                return status(400);
+            }
             self.meta_set("token_hash", hash.trim())?;
+            if let Some(c) = init["abuse_contact"].as_str() {
+                self.meta_set("abuse_contact", c)?;
+            }
             return status(201);
+        }
+        if path == "/info" {
+            if self.meta_get("token_hash")?.is_none() {
+                return status(404);
+            }
+            return Response::from_json(&serde_json::json!({
+                "abuse_contact": self.meta_get("abuse_contact")?,
+                "disabled": self.meta_get("disabled")?.is_some(),
+            }));
         }
         if path == "/disable" {
             if self.meta_get("token_hash")?.is_none() {

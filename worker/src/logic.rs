@@ -111,6 +111,27 @@ pub fn forward_header(name: &str) -> bool {
         || n.starts_with("x-forwarded-"))
 }
 
+/// A per-service abuse contact: an email address or an `https://` URL, no whitespace or control characters, at most 254 bytes.
+pub fn abuse_contact_is_valid(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() < 8 || s.len() > 254 || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    if let Some(rest) = s.strip_prefix("https://") {
+        return rest.contains('.') && !rest.starts_with('/') && !rest.starts_with('.');
+    }
+    match s.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && !domain.contains('@')
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        }
+        None => false,
+    }
+}
+
 /// Operator-tunable limits (Worker vars), defaults from `docs/DESIGN.md` section 4.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
@@ -295,5 +316,39 @@ mod tests {
         assert!(b.take(&l, 999.0).is_err(), "not yet refilled");
         assert!(b.take(&l, 1000.0).is_ok(), "one second refills one token");
         assert!(b.take(&l, 1000.0).is_err());
+    }
+
+    #[test]
+    fn abuse_contacts_are_emails_or_https_urls() {
+        for ok in [
+            "abuse@example.org",
+            "https://example.org/report",
+            " a.b@x.example ",
+            "https://x.io",
+        ] {
+            assert!(abuse_contact_is_valid(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "abuse",
+            "abuse@",
+            "@example.org",
+            "a@b",
+            "a@@example.org",
+            "a b@example.org",
+            "http://example.org/report",
+            "https://",
+            "https:///x.y",
+            "javascript:alert(1)//x.y",
+            "a@example.org
+Bcc: x@y.z",
+            "a@.example.org",
+        ] {
+            assert!(!abuse_contact_is_valid(bad), "{bad:?}");
+        }
+        assert!(!abuse_contact_is_valid(&format!(
+            "a@{}.org",
+            "x".repeat(260)
+        )));
     }
 }
