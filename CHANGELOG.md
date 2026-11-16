@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.15
+
+- client: select the rustls `ring` crypto provider explicitly, so a `wss://` connection no longer panics (found by the live smoke run); test added. DEPLOY.md: secret custody and rotation, TLS note, CPU is read from the dashboard.
+
 ## 0.0.13
 
 - relay: optional per-service abuse contact on channel provisioning (`POST /admin/channels` body `{"abuse_contact": email-or-https-url}`), read back with admin-only `GET /admin/channels/<id>`; malformed is 400 (board 447).

@@ -30,6 +30,23 @@ Routes: `thinkersjournal.net/hooks/*`, `/connect/*`, `/admin/*`. Every other pat
 so there is no second public URL. `/admin/*` is public but needs `ADMIN_SECRET` (constant-time compare); if that is not enough,
 drop the third route and provision over `wrangler`'s own tooling instead.
 
+## Secrets: who holds them, and rotation
+
+`ADMIN_SECRET` and `CHANNEL_KEY` are generated per run under `with-secret` and **held by nobody afterwards**: they are not in a
+file, in git or in chat; only the Worker's secret store has them. To rotate, generate new values under `with-secret` and run
+`deploy/deploy.sh secrets` again (no code change). Rotating `ADMIN_SECRET` only changes who can call `/admin/*` (a smoke run
+needs the current one, so it is rotated first). **Rotating `CHANNEL_KEY` invalidates every channel id**: ids are HMAC-signed with
+it, so every provisioned channel stops resolving and has to be provisioned again. The deploy token cannot read secret values
+or the CPU metrics (below).
+
+## TLS in the client
+
+`surfaceant-client` selects rustls's `ring` crypto provider itself, once, before its first connection (`ensure_tls_provider`).
+Without that, rustls 0.23 panics on the first `wss://` connection ("Could not automatically determine the process-level
+CryptoProvider"); the first live smoke run (2026-11-16) hit exactly that. A program that installs its own provider first
+keeps it. Checked by `crates/surfaceant-client/tests/tls.rs` (a `wss://` connect reaches the TLS handshake and returns an error,
+no panic; red before the fix) and by the live smoke test, which connects over WSS.
+
 ## Smoke test (`crates/surfaceant-client/examples/smoke.rs`)
 
 Provisions a throwaway channel and checks, over real HTTPS/WSS: forged id 404, admin without secret 401, two offline events
@@ -39,7 +56,7 @@ curl start-up). Same test passes against `wrangler dev` (verified 2026-11-14: 12
 
 ## CPU time and cold start (the one unverified spike item)
 
-The Worker cannot report its own CPU. After the smoke run, read it from the dashboard: Workers & Pages > `surfaceant-worker` >
+The Worker cannot report its own CPU: **CPU is read from the dashboard (Metrics); the deploy token cannot read it.** After the smoke run, read it from the dashboard: Workers & Pages > `surfaceant-worker` >
 Metrics (CPU time p50/p99, per request) and, for the Durable Object, the Durable Objects tab. Observability is enabled in
 `wrangler.jsonc`, so `wrangler tail surfaceant-worker` also shows per-invocation outcomes. Record the p50/p99 and the first
 request after idle (cold start) in `docs/SPIKE-WORKER-LANGUAGE.md`, replacing "UNVERIFIED". Acceptance: p99 CPU under the plan's

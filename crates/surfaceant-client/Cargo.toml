@@ -12,6 +12,7 @@ publish.workspace = true
 surfaceant-proto = { path = "../surfaceant-proto" }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "io-util", "sync"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]

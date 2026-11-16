@@ -249,12 +249,23 @@ pub async fn session(
     }
 }
 
+/// Select rustls's process-level crypto provider (`ring`) once. rustls 0.23 panics on the first TLS connection when
+/// none is selected and its features do not name exactly one, so a `wss://` relay would crash the client.
+/// An application that has already installed its own provider keeps it: the error from a second install is ignored.
+fn ensure_tls_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 async fn session_inner(
     cfg: &Config,
     seen: &mut Dedup,
     last_acked: &mut i64,
     on_event: &(dyn Fn(&Event, Option<u16>) + Sync),
 ) -> Result<String, Error> {
+    ensure_tls_provider();
     let mut req = connect_url(&cfg.relay, &cfg.channel_id).into_client_request()?;
     req.headers_mut().insert(
         "Authorization",

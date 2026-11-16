@@ -1,6 +1,6 @@
 [package]
 name = "surfaceant"
-version = "0.0.13"
+version = "0.0.15"
 edition = "2024"
 rust-version = "1.88"
 description = "Planned. The crate name is reserved; there is no API yet."
@@ -13,7 +13,7 @@ publish = false
 members = ["crates/surfaceant-proto", "crates/surfaceant-client", "worker"]
 
 [workspace.package]
-version = "0.0.13"
+version = "0.0.15"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
