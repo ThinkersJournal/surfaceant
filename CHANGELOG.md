@@ -2,6 +2,11 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.11
+
+- client: `Config` no longer prints its connection token through `Debug` (CodeRipper SEC-012); test added.
+- SPDX headers on every source file (SUP-016); `Channel` documented (MOD-001).
+
 ## 0.0.10
 
 - CI: move the shared portfolio workflow to CodeRipper 0.47.5 (`c72a6e0`). The rule-id migration found nothing to rename.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Post-deploy smoke test against a LIVE relay (https/wss). Row 4.
 //!
 //! Env: `SMOKE_RELAY` (`https://host`, or `http://127.0.0.1:port` for `wrangler dev`; no trailing slash) and `SMOKE_ADMIN_SECRET`.
