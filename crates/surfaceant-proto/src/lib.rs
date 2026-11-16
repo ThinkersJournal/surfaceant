@@ -154,7 +154,7 @@ mod tests {
             Frame::Welcome {
                 v: PROTOCOL_VERSION,
                 max_event_bytes: 1 << 20,
-                ttl_seconds: 86_400,
+                ttl_seconds: 300,
                 server_time: "2026-11-14T00:00:00Z".into(),
                 dropped_events: 3,
             },

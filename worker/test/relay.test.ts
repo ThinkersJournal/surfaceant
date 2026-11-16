@@ -1,5 +1,5 @@
-import { SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { env, runDurableObjectAlarm, SELF } from "cloudflare:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const BASE = "https://relay.test";
 const ADMIN = { Authorization: "Bearer test-admin-secret" };
@@ -237,5 +237,46 @@ describe("randomness", () => {
     }
     expect(new Set(all.map((a) => a.channel_id)).size).toBe(16);
     expect(new Set(all.map((a) => a.token)).size).toBe(16);
+  });
+});
+
+describe("buffer lifetime (5 minutes)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const stubFor = (id: string) => env.CHANNEL.get(env.CHANNEL.idFromName(id));
+
+  it("the welcome states a 300 s TTL", async () => {
+    const { channel_id, token } = await provision();
+    const c = await connect(channel_id, token);
+    expect((await c.hello()).ttl_seconds).toBe(300);
+  });
+
+  it("an event for an offline service is dropped after 5 minutes, and kept just before", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.now();
+    const kept = await provision();
+    const dropped = await provision();
+    await post(kept.channel_id, "k", { "X-GitHub-Delivery": "kept" });
+    await post(dropped.channel_id, "d", { "X-GitHub-Delivery": "dropped" });
+    vi.setSystemTime(t0 + 299_000);
+    await runDurableObjectAlarm(stubFor(kept.channel_id)); // control: 299 s is inside the TTL
+    vi.setSystemTime(t0 + 301_000);
+    await runDurableObjectAlarm(stubFor(dropped.channel_id));
+    vi.useRealTimers();
+    const ck = await connect(kept.channel_id, kept.token);
+    await ck.hello();
+    expect((await ck.next()).delivery_id).toBe("kept");
+    const cd = await connect(dropped.channel_id, dropped.token);
+    await cd.hello();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(cd.inbox).toEqual([]);
+  });
+
+  it("an online service receives an event at once, whatever the TTL", async () => {
+    const { channel_id, token } = await provision();
+    const c = await connect(channel_id, token);
+    await c.hello();
+    await post(channel_id, "o", { "X-GitHub-Delivery": "online" });
+    expect((await c.next()).delivery_id).toBe("online");
   });
 });

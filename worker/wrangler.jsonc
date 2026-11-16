@@ -11,7 +11,7 @@
   // Limits (docs/DESIGN.md section 4). Secrets CHANNEL_KEY and ADMIN_SECRET are set with `wrangler secret put`, never in git.
   "vars": {
     "MAX_BODY_BYTES": "1048576",
-    "BUFFER_TTL_SECONDS": "86400",
+    "BUFFER_TTL_SECONDS": "300",
     "BUFFER_MAX_EVENTS": "1000",
     "BUFFER_MAX_BYTES": "67108864",
     "RATE_PER_SEC": "10",
