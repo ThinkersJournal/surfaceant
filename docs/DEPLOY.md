@@ -54,6 +54,17 @@ buffered (202) and replayed exactly once to a local program, a repeated delivery
 events delivered, the channel disabled and then refusing events. It prints client-observed latency (includes the network and
 curl start-up). Same test passes against `wrangler dev` (verified 2026-11-14: 12 deliveries, median 68 ms).
 
+## Live result (2026-11-16)
+
+Deployed by the PM (board 445 A; Worker version `b9f37248`, three routes, secrets set). The live smoke test **passed in full**
+at about 21:30Z against `thinkersjournal.net` at main 0.0.15: channel provisioned, forged id 404, admin without secret 401,
+offline events buffered and replayed exactly once, a repeated delivery id not stored twice, 12 distinct deliveries, then the
+channel disabled and refusing events. Client-observed POST-to-delivered latency: **median 347 ms, max 354 ms** (includes
+curl start-up and TLS from the PM's machine; the local `wrangler dev` figure of 68 ms has no network in it). The first live
+run had stopped at the client's rustls provider panic (fixed in #14). The Worker secrets were rotated after the run and are
+held by nobody. **Limit: CPU p50/p99 and cold start were not measured** (below); source: the PM's report of the run, not an
+artifact kept in this repository.
+
 ## CPU time and cold start (the one unverified spike item)
 
 The Worker cannot report its own CPU: **CPU is read from the dashboard (Metrics); the deploy token cannot read it.** After the smoke run, read it from the dashboard: Workers & Pages > `surfaceant-worker` >

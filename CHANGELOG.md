@@ -4,7 +4,7 @@ Versions are allocated by the portfolio PM at merge time; one version covers eve
 
 ## 0.0.16
 
-- docs: DESIGN-SUBDOMAINS.md option (e), one delegated child zone on two VPS nameservers, with the delegation facts (verified/UNVERIFIED); option (d) corrected with the NS and zone-record limits.
+- docs: DESIGN-SUBDOMAINS.md option (e), one delegated child zone on two VPS nameservers, with the delegation facts (verified/UNVERIFIED); option (d) corrected with the NS and zone-record limits. Live smoke result recorded in DEPLOY.md, ROADMAP row 4 (done) and README; CPU/cold start still not measured.
 
 ## 0.0.15
 
