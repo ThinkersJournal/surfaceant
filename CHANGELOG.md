@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.16
+
+- docs: DESIGN-SUBDOMAINS.md option (e), one delegated child zone on two VPS nameservers, with the delegation facts (verified/UNVERIFIED); option (d) corrected with the NS and zone-record limits.
+
 ## 0.0.15
 
 - client: select the rustls `ring` crypto provider explicitly, so a `wss://` connection no longer panics (found by the live smoke run); test added. DEPLOY.md: secret custody and rotation, TLS note, CPU is read from the dashboard. docs: DESIGN-SUBDOMAINS.md gains "Nested names and where TLS ends" (facts marked verified/UNVERIFIED, options a-d, recommendation).
