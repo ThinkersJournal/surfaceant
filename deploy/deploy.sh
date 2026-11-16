@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # SurfaceAnt relay deploy (ROADMAP row 4). Runbook and prerequisites: docs/DEPLOY.md.
 #
 #   deploy/deploy.sh check     build + `wrangler deploy --dry-run`; needs no credentials, changes nothing

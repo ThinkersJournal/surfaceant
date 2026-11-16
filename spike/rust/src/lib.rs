@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use hmac::{Hmac, KeyInit, Mac};

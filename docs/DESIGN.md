@@ -16,8 +16,8 @@ Status: **amended 2026-11-14** after the rulings below; the options text is kept
 
 A sender POSTs `https://thinkersjournal.net/hooks/<channel-id>`. The relay passes the **method, selected headers and raw body
 through untouched** (the user's program verifies the sender's signature; the relay never holds the sender's secret). A client
-on the user's machine holds one outbound WebSocket to the channel. While the client is offline the relay buffers events up to
-24 h; the client acks and the relay deletes. First customer: GitHub webhooks into `tools/gh_webhook_receiver.py`, which checks
+on the user's machine holds one outbound WebSocket to the channel. While the client is offline the relay buffers events for at
+most 5 minutes (CireSnave, board 447); the client acks and the relay deletes. First customer: GitHub webhooks into `tools/gh_webhook_receiver.py`, which checks
 `X-Hub-Signature-256` over the raw body and de-duplicates on the delivery id.
 
 Cloudflare limits below were read from the Durable Objects pricing and limits pages on 2026-10-31 (Free plan) and **must be
@@ -66,7 +66,7 @@ Node CI job; CireSnave's "latest versions of dependencies" rule applies to it as
 
 - **A. DO SQLite table** (recommended): `events(seq INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT UNIQUE, received_at,
   headers BLOB, body BLOB, size)`. `seq` gives replay order; the unique `delivery_id` gives idempotency; body as BLOB keeps a
-  1 MiB event inside the 2 MB row limit (base64 would not). Expiry via a DO **alarm** that deletes rows older than 24 h.
+  1 MiB event inside the 2 MB row limit (base64 would not). Expiry via a DO **alarm** that deletes rows older than 5 minutes (`BUFFER_TTL_SECONDS`, 300).
 - B. DO key-value storage: same limits, no unique index; dedup would need a second key. Worse.
 
 ### 2.4 Authentication
@@ -123,10 +123,11 @@ WebSocket text frames, one JSON object each, tagged `"type"`. **[Amended]** The 
 | Control | v1 value | Why |
 |---|---|---|
 | Max body | 1 MiB (`413` over; checked on `Content-Length` and while reading) | Fits the 2 MB row; matches the receiver |
-| Buffer TTL | 24 h (alarm sweeps) | Brief; privacy |
+| Buffer TTL | 5 min (alarm sweeps; was 24 h, changed by board 447) | Content is kept only long enough for an online service to receive it; privacy |
 | Buffer cap per channel | 1,000 events or 64 MiB, oldest-first drop with a counter surfaced in the next `welcome` | An offline client must not fill storage |
 | Rate limit | per-channel token bucket in the DO, e.g. 10 req/s burst 50 -> `429` + `Retry-After` | DO is already the serialisation point, so no extra service |
 | Disable | `POST /admin/channels/<id>/disable` flips a flag; disabled channels answer `410` and drop the socket | Required by the brief |
+| Abuse contact | `POST /admin/channels` takes an optional JSON body `{"abuse_contact": "<email or https URL>"}`, stored per channel and read back with `GET /admin/channels/<id>` (`{abuse_contact, disabled}`); a malformed one is `400` | Each surfaced service lists its own contact in addition to ThinkersJournal's (board 447); absent means the ThinkersJournal-wide one applies |
 | Methods | POST only on `/hooks/<id>`; others `405` | |
 | Logging | status + channel id hash + size only; never bodies or headers | Brief |
 | Unknown channel | `404`, same response time as a disabled one is not required but body is empty | Do not confirm which ids exist |

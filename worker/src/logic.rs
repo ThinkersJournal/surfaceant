@@ -111,6 +111,31 @@ pub fn forward_header(name: &str) -> bool {
         || n.starts_with("x-forwarded-"))
 }
 
+/// A per-service abuse contact: an email address or an `https://` URL, no whitespace or control characters, at most 254 bytes.
+pub fn abuse_contact_is_valid(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() < 8 || s.len() > 254 || s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    if let Some(rest) = s.strip_prefix("https://") {
+        return rest.contains('.') && !rest.starts_with('/') && !rest.starts_with('.');
+    }
+    match s.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && !domain.contains('@')
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        }
+        None => false,
+    }
+}
+
+/// How long an unacknowledged event is kept for an offline service: 5 minutes (CireSnave 2026-11-16, board 447:
+/// "only kept for long enough for a service that is online to receive it"). Was 24 hours.
+pub const BUFFER_TTL_SECONDS: u64 = 300;
+
 /// Operator-tunable limits (Worker vars), defaults from `docs/DESIGN.md` section 4.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
@@ -134,7 +159,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_body_bytes: 1 << 20,
-            buffer_ttl_seconds: 86_400,
+            buffer_ttl_seconds: BUFFER_TTL_SECONDS,
             buffer_max_events: 1_000,
             buffer_max_bytes: 64 << 20,
             rate_per_sec: 10.0,
@@ -295,5 +320,46 @@ mod tests {
         assert!(b.take(&l, 999.0).is_err(), "not yet refilled");
         assert!(b.take(&l, 1000.0).is_ok(), "one second refills one token");
         assert!(b.take(&l, 1000.0).is_err());
+    }
+
+    #[test]
+    fn abuse_contacts_are_emails_or_https_urls() {
+        for ok in [
+            "abuse@example.org",
+            "https://example.org/report",
+            " a.b@x.example ",
+            "https://x.io",
+        ] {
+            assert!(abuse_contact_is_valid(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "abuse",
+            "abuse@",
+            "@example.org",
+            "a@b",
+            "a@@example.org",
+            "a b@example.org",
+            "http://example.org/report",
+            "https://",
+            "https:///x.y",
+            "javascript:alert(1)//x.y",
+            "a@example.org
+Bcc: x@y.z",
+            "a@.example.org",
+        ] {
+            assert!(!abuse_contact_is_valid(bad), "{bad:?}");
+        }
+        assert!(!abuse_contact_is_valid(&format!(
+            "a@{}.org",
+            "x".repeat(260)
+        )));
+    }
+
+    #[test]
+    fn buffer_ttl_is_five_minutes() {
+        // CireSnave 2026-11-16 (board 447): content is kept only long enough for an online service to receive it.
+        assert_eq!(BUFFER_TTL_SECONDS, 300);
+        assert_eq!(Limits::default().buffer_ttl_seconds, BUFFER_TTL_SECONDS);
     }
 }
