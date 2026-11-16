@@ -1,8 +1,8 @@
 # SurfaceAnt: operator, abuse policy, privacy notice and terms
 
 Draft text for the relay's public pages, written to CireSnave's rulings on board 447 (see [`ROW5-DECISIONS.md`](ROW5-DECISIONS.md)).
-The legal entity is the placeholder `[[LEGAL_ENTITY]]` (board 129) until the Community lane names it. Not yet published: the
-relay is not deployed (board 445) and launch scope is people CireSnave names.
+The legal entity is the placeholder `[[LEGAL_ENTITY]]` (board 129) until the Community lane names it. Not yet published. The
+relay is deployed, but launch scope is people CireSnave names.
 
 ## 1. Who runs this, and who to tell about abuse
 
