@@ -174,3 +174,24 @@ async fn out_of_zone_is_refused() {
     let t = tcp(e.tcp, "example.org.", RecordType::A).await;
     assert_eq!(t.metadata.response_code, ResponseCode::Refused);
 }
+
+/// Direct-mode design question (DESIGN-VPS-EDGE "Direct mode" 2): two A records at one name.
+/// Measured on hickory-server 0.26.3: the order of the answers over 8 queries. Pinned as a
+/// set (both present, one RRset, one TTL); the ORDER is printed, not asserted, because DNS
+/// gives no priority between records and clients may reorder anyway (RFC 1034 s3.6).
+#[tokio::test]
+async fn two_a_records_are_one_rrset_with_no_priority() {
+    let e = start().await;
+    let mut orders = Vec::new();
+    for _ in 0..8 {
+        let r = udp(e.udp, "multi.fixture.test.", RecordType::A).await;
+        assert_eq!(r.answers.len(), 2);
+        assert_eq!(r.answers[0].ttl, r.answers[1].ttl, "one RRset, one TTL");
+        orders.push(r.answers.iter().map(|a| a.data.to_string()).collect::<Vec<_>>().join(","));
+    }
+    println!("orders over 8 queries: {orders:?}");
+    let mut all: Vec<_> = orders.iter().flat_map(|o| o.split(',').map(String::from)).collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all, ["192.0.2.41", "192.0.2.42"]);
+}
