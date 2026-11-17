@@ -26,7 +26,9 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// What the client needs to run.
 #[derive(Clone)]
 pub struct Config {
-    /// Relay base, `wss://host` (or `ws://host:port` for a local relay).
+    /// Relay base, `wss://host` (certificate validated). `ws://` is accepted only to a loopback address (the host is
+    /// resolved and every answer must be loopback, e.g. `ws://127.0.0.1:8787` for `wrangler dev`); anything else is
+    /// refused with an error that names the rule (`docs/DESIGN-VPS-EDGE.md` 3.6).
     pub relay: String,
     /// The channel id.
     pub channel_id: String,
@@ -249,6 +251,32 @@ pub async fn session(
     }
 }
 
+/// The rule for a plain `ws://` relay (CireSnave 2026-11-17, `docs/DESIGN-VPS-EDGE.md` 3.6): it is accepted only
+/// when the host RESOLVES to loopback addresses, every one of them. `host` is for the message only; the decision is
+/// on `addrs`, so a name such as `localhost.evil.example` passes only if it resolves to loopback.
+pub fn check_ws_addrs(host: &str, addrs: &[std::net::SocketAddr]) -> Result<(), Error> {
+    if !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback()) {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing ws:// relay {host}: ws:// is accepted only to a loopback address (127.0.0.0/8 or ::1; the          name is resolved and every answer must be loopback). Use wss:// with certificate validation          (secure protocols only, docs/DESIGN-VPS-EDGE.md 3.6)"
+    )
+    .into())
+}
+
+/// Open the plain TCP stream for a `ws://` relay: resolve once, check the answers, and connect to the address that
+/// was checked (never re-resolving the name, so a changing DNS answer cannot slip a non-loopback host past the check).
+async fn connect_loopback(
+    uri: &tokio_tungstenite::tungstenite::http::Uri,
+) -> Result<TcpStream, Error> {
+    let host = uri.host().ok_or("relay URL has no host")?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port = uri.port_u16().unwrap_or(80);
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    check_ws_addrs(host, &addrs)?;
+    Ok(TcpStream::connect(addrs[0]).await?)
+}
+
 /// Select rustls's process-level crypto provider (`ring`) once. rustls 0.23 panics on the first TLS connection when
 /// none is selected and its features do not name exactly one, so a `wss://` relay would crash the client.
 /// An application that has already installed its own provider keeps it: the error from a second install is ignored.
@@ -271,7 +299,17 @@ async fn session_inner(
         "Authorization",
         HeaderValue::from_str(&format!("Bearer {}", cfg.token))?,
     );
-    let (ws, _) = tokio_tungstenite::connect_async(req).await?;
+    let (ws, _) = if req.uri().scheme_str() == Some("ws") {
+        let stream = match connect_loopback(req.uri()).await {
+            Ok(s) => s,
+            // A refused `ws://` is a configuration error: stop, do not retry forever.
+            Err(e) if e.to_string().starts_with("refusing ws://") => return Ok(e.to_string()),
+            Err(e) => return Err(e),
+        };
+        tokio_tungstenite::client_async_tls(req, stream).await?
+    } else {
+        tokio_tungstenite::connect_async(req).await? // wss:// validates the server certificate
+    };
     let (mut tx, mut rx) = ws.split();
     let hello = Frame::Hello {
         v: PROTOCOL_VERSION,
