@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.18
+
+- docs: `DESIGN-VPS-EDGE.md` interim-until-PSL (PM task, CireSnave 2026-11-17): section 8.1 interim isolation (events/named users only, `Set-Cookie` `Domain` strip rule and test, passthrough waits, surface-mode gate kept), section 3.5 certificates before the entry (rate-limit request, Google Trust Services fallback read from its own page, ZeroSSL/SSL.com unverified), section 8.2 day-one usage log.
+
 ## 0.0.17
 
 - docs: `docs/DESIGN-VPS-EDGE.md` (board 457, option F): `thinkersjournal.net` on two VPS nameservers; authoritative DNS (hickory-server), the relay re-hosted as a server on the same wire protocol, our own wildcard and per-user wildcard TLS with SNI passthrough, user page, backups and restore, cutover and rollback, Public Suffix List, build order. Supersedes option (e) of `DESIGN-SUBDOMAINS.md`.

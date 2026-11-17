@@ -162,9 +162,33 @@ note and its own gate before slice 7. Until it exists, nested names resolve and 
 `new.blog.example.co.uk` -> `example.co.uk`). **Inference, not stated on the page:** until `thinkersjournal.net` is itself on
 the PSL, the registered domain is `thinkersjournal.net` for every user, so **all users' first issuances plus our own wildcard
 share 50 per week**: about 50 new users a week, at most. After a PSL entry each `<user>.thinkersjournal.net` would be its own
-registered domain and the limit stops being shared (**inference**, verify with Let's Encrypt before relying on it). Mitigation
-if the PSL is refused: the rate-limit adjustment form (the page says it takes a few weeks and covers registered-domain limits)
-or an additional ACME CA, since `instant-acme` and the clients speak ACME generally (**UNVERIFIED** which CAs fit).
+registered domain and the limit stops being shared (**inference**, verify with Let's Encrypt before relying on it).
+
+### 3.5 Certificates before a PSL entry exists (PM [TASK] interim-until-psl, CireSnave 2026-11-17)
+
+CireSnave accepted building the service and getting users first, then applying to the PSL. Until the entry exists the 50 a
+week in section 3.4 is shared by every user, so the plan beyond it is, in order:
+
+1. **Count first.** Our own wildcard is one issuance and renewals are exempt, so the budget is about 49 new per-user
+   wildcards a week. Only users who run their own nested services (section 3.2) need one; events mode and the one-label page
+   use our wildcard and cost nothing against it. Track issuances per week in the usage log (section 8.2) and alert at 40.
+2. **Ask Let's Encrypt for the rate-limit adjustment.** The rate-limits page offers a request form for the registered-domain
+   limit and says it takes a few weeks, so file it **at launch, not when the limit is hit**. An answer is not guaranteed
+   and the page does not say the PSL status matters; treat as **UNVERIFIED** until it answers.
+3. **Fallback CA with its own limits: Google Trust Services Public CA**, read 2026-11-17 on its own Cloud documentation
+   (`docs.cloud.google.com/certificate-manager/docs/quotas`, no last-updated date shown): ACME, DNS-01 and wildcards are
+   supported and free of charge; the quotas are 100 new orders per hour, 100 new accounts per hour (25 per minute), 300
+   authorizations per hour, **per Google Cloud project**, adjustable by request, and the page states no per-registered-domain
+   limit and does not mention the PSL. Costs: **external account binding is required**, each ACME account is bound to a
+   Google Cloud project by an EAB key (one key, one account, used within 7 days), and a project's accounts share its quotas.
+   So the fallback fits **our own** issuance and a user whose software we provision; it does **not** let each user's
+   unmodified client get a certificate without a Google Cloud project of their own. CAA at the apex must then also allow
+   `pki.goog` (section 1.1 lists CAA). Absence stated with its control: the page states no per-domain limit (the same page
+   states the per-project ones, so the page was read, not skipped).
+4. **ZeroSSL and SSL.com were not verified**: their official documentation pages returned HTTP 403 and 404 to our fetch on
+   2026-11-17, so no claim about their limits is made. Read them by hand before naming either.
+5. Beyond that, new nested-service users **queue** (a waiting list shown on the user page), rather than failing: events mode
+   and the page keep working without a certificate of their own.
 
 ## 4. The per-user page
 
@@ -271,8 +295,54 @@ cookies cannot reach another's and so Let's Encrypt limits stop being shared (se
   on time and downstream copies lag. Plan for refusal at launch.
 
 If refused or pending: launch stays events-only, one label (our wildcard, no user-controlled web content), people CireSnave
-names; no per-user wildcards beyond the 50-a-week budget; surface mode and passthrough wait. Submitting is an external act made
-only on CireSnave's word.
+names; no per-user wildcards beyond the 50-a-week budget (section 3.5); surface mode and passthrough wait. Submitting is an
+external act made only on CireSnave's word.
+
+### 8.1 Interim isolation until a PSL entry exists (PM [TASK] interim-until-psl, CireSnave 2026-11-17)
+
+CireSnave accepted: *build the service and get users first, then apply to the PSL* (relayed by the PM). The risk this
+section closes: without the entry, a service on `alice.thinkersjournal.net` can set a cookie with `Domain=thinkersjournal.net`
+and bob's service on `bob.thinkersjournal.net` receives it (cookie tossing, session fixation, login-CSRF).
+
+**Gate, kept visible: surface mode (row 6) must not ship before the PSL entry exists and no parent-domain cookies are
+possible.** Everything below is what may ship *before* the entry, and nothing in it relaxes the gate.
+
+| Mode before the entry | Ships? | Why |
+|---|---|---|
+| Events/webhook mode (no browser; a sender POSTs to `/hooks/<id>`, the user's client reads the stream) | **Yes** | No browser renders user-controlled content on a user name, so there is no cookie jar to poison |
+| Named users (people CireSnave names, per the paragraph above) | **Yes** | Trust is personal until the entry exists |
+| Our terminated one-label names (page, hooks, apex) | **Yes, with the strip rule below** | We write every byte served, and the page already sets no cookies (section 4) |
+| Passthrough / surface mode (user's own software behind our SNI route) | **No, waits for the entry** | We cannot see inside a passthrough stream, so we cannot strip a header from it; no edge rule protects it |
+
+**Strip rule (where the edge terminates TLS):** the edge removes the `Domain` attribute from every `Set-Cookie` response
+header it emits for a name under `thinkersjournal.net`, so any cookie it ever sets is host-only. Match the attribute
+name case-insensitively, tolerate whitespace around `=` and `;`, apply to **every** `Set-Cookie` header on the response (there
+may be several), leave other attributes untouched, and drop no cookie, only the attribute. It protects only responses we
+terminate; it says nothing about passthrough, which is why passthrough is in the table above as No. Defence in depth: the
+page sets no cookies at all (section 4); any cookie we introduce later uses the `__Host-` prefix, which browsers refuse
+unless it is host-only, secure, path `/` and carries no `Domain`.
+
+**Test (slice 5, fails if the rule is wrong):** a unit test on the header filter with inputs
+`a=b; Domain=thinkersjournal.net; Path=/` -> `a=b; Path=/`; `a=b; domain = .thinkersjournal.net; Secure` -> `a=b; Secure`;
+`a=b; Domain=alice.thinkersjournal.net` -> `a=b` (a subname is stripped too: host-only is the only form); two `Set-Cookie`
+headers both stripped; a cookie with no `Domain` unchanged; and an HTTPS integration test against the staging edge that
+requests a handler response containing `Domain=` and asserts the wire header has none. A mutation (rule disabled) must make it
+fail; run it and read the failure, not just the pass.
+
+### 8.2 Usage log from day one
+
+The PSL maintainers ask for the number of people using subnames, so the registry keeps, from the first user:
+
+- `distinct_holders`: the count of **distinct people who hold a subname** (an account holding three names counts once), stored
+  as one row per day: `(date_utc, distinct_holders, names_total, le_issuances_this_week)`. Numbers and a date only, **no
+  personal data** and no way to go from a row to a person; it is computed from the registry and the registry is not exported
+  into it.
+- Written daily by the edge process, included in the snapshot to box B and in the off-provider backup (section 5.2), and
+  read out by a small admin route (`GET /admin/usage`, behind the existing admin secret) so the PM or CireSnave can quote the
+  figure and its date to the PSL ticket without database access.
+- The PSL guidance (section 8) says projects "not serving more then thousands of users are quite likely to be declined"; this
+  log is how we know when the figure is worth submitting, and what number we can honestly state. Slice 2 creates the table,
+  slice 3 the route.
 
 ## 9. Build order, smallest slice first
 
@@ -283,11 +353,11 @@ fails if it is wrong.
    the zone; UDP and TCP on a high port in CI. Test with `dig`: apex SOA and NS, a name from the export, NXDOMAIN, a wildcard
    case, TCP, truncation to TCP for a large answer, `REFUSED` for an out-of-zone name. Runs on A and B with the diff script
    against Cloudflare. Also settles the UNVERIFIED hickory claims in section 1.1 (or switches to NSD/Knot).
-2. **Database-backed answers**: `registry.db`, synthesis at any depth, reserved and suspended names, RRL, snapshot to B.
+2. **Database-backed answers**: `registry.db`, synthesis at any depth, reserved and suspended names, RRL, snapshot to B, the daily usage-log table (section 8.2).
 3. **Relay server** with the Worker's routes and limits on `registry.db` and `buffer.db`, **plus backups and the first restore
    drill** (before anything depends on it). Pass the existing e2e unchanged.
 4. **TLS** for our wildcard by local DNS-01; the relay served over HTTPS on staging, then on the real names.
-5. **User page and abuse form** (needs the Community lane's endpoint).
+5. **User page and abuse form** (needs the Community lane's endpoint), and the `Set-Cookie` `Domain` strip rule with its test (section 8.1).
 6. **ACME API** for per-user wildcards, against Let's Encrypt staging.
 7. **Stream tunnel and SNI passthrough** (row 6's own design and gate; needs the PSL decision).
 8. **Cutover** (section 7), after the rehearsal.
