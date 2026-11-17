@@ -387,7 +387,7 @@ CireSnave asked whether a user's names could be answered with the user's own sta
 | Chrome, Firefox | the curl page says "Firefox and Chrome currently default to 300 ms" | not run |
 | Safari/Apple, Android, OkHttp | **UNVERIFIED** (RFC 8305's authors are at Apple, which is not evidence of what the frameworks do; the OkHttp page returned 404) | not run |
 
-  The host used for the measurements has **no working global IPv6** (a request to an IPv6-only site failed), so the dead `AAAA` attempt failed within about 15 ms (the connection went to the live `A` at once): that run shows only the fast-fail case, not a black-holed `AAAA`. A true black-holed `AAAA` test needs a host with IPv6 and a drop rule; do that before enabling direct mode for anyone.
+  The host used for the measurements has **no working global IPv6** (a request to an IPv6-only site failed), so the dead `AAAA` attempt failed within about 15 ms (the connection went to the live `A` at once): that run shows only the fast-fail case, not a black-holed `AAAA`. A true black-holed `AAAA` test needs a host with IPv6 and a drop rule; it is **left unmeasured for now** (PM 2026-11-17: no host available) and written down in 10.7 for the VPS; do it before enabling direct mode for anyone.
 - **In-flight connections do not move (inference from TCP).** A connection already open to the user's address breaks if it goes down; the client reconnects and, after the DNS change, gets the relay.
 
 ### 10.2 "Primary `A` / secondary `A`" and health-checked `A`
@@ -425,8 +425,19 @@ The design promises users' real IPs are not shown; direct mode publishes them in
 Needs slice 2 (database-backed answers), slice 3 (relay), and slice 4 (TLS) first.
 
 1. **AAAA-direct (no failover logic).** `registry.db` gains a per-name direct address (family, address, consent timestamp, verified_at); the agent reports its stable address over the control connection; the edge applies 10.4 rules 1 to 3; the synthesiser answers the user's `AAAA` plus the relay `A` (and the relay `AAAA` while the probe fails). Tests: every rejected range, a mismatching claimed address, a failed probe, consent absent, removal on probe failure.
-2. **Measure before enabling for anyone:** a real black-holed `AAAA` on a host with IPv6, across a browser, curl, Go and Rust clients and a phone, recorded in this section replacing the UNVERIFIED cells.
+2. **Measure before enabling for anyone:** run the protocol in 10.7 on the VPS, recording the results in this section in place of the UNVERIFIED cells.
 3. **Health-checked IPv4 (only if wanted):** same record table for `A`, plus the TTL and failover numbers from 10.2 measured against real resolvers.
+
+### 10.7 Measurement protocol, to run on the VPS when the edge goes there (not run yet)
+
+Nothing here has been run; the only dual-stack machines are CireSnave's rented VPSs and nothing runs on them without his say-so. Each cell marked "not run" in 10.1 is filled by this protocol.
+
+- **Setup.** A host with working global IPv6 and IPv4, a server `S` listening on TCP 443 (or any port) reachable on a **live IPv4** `A_live`, and a **dead IPv6** `AAAA_dead` that drops packets silently (a global address of the same host with `ip6tables -A INPUT -d <AAAA_dead> -j DROP`, so SYNs are black-holed and no ICMP unreachable returns; a second control uses `REJECT` to measure the fast-fail case). Use a name served by our edge (or `curl --resolve` / a hosts entry carrying both addresses) so the client sees one `AAAA` plus one `A`.
+- **Per client.** Run each client from a **separate** dual-stack host so the measuring client is not on the filtered machine: curl, Go (`net.Dialer`, `http.Client`), Rust (`std::net::TcpStream::connect`, `reqwest`), Python (`create_connection`), Chrome and Firefox (DevTools Network "Connecting" time), Safari/iOS and Android (a small test app or the browser), over mobile data and over Wi-Fi.
+- **Time.** From the call to the first byte of the HTTP response, and separately the connect time; three runs per client per case, report all three, with a control run against `A_live` alone. Record client name and version and OS.
+- **Cases.** (a) dead `AAAA` (DROP) plus live `A`; (b) same with REJECT; (c) dead first `A` plus live second `A` (two-`A` case); (d) IPv6-only client (no IPv4 route): published `AAAA` only, then dead; (e) fail-back: after `AAAA_dead` is made live, how long until a new connection uses it.
+- **Resolver TTL check (10.2).** Publish a 30 s TTL record, change it, and time how long each resolver (an ISP resolver, 1.1.1.1, 8.8.8.8, a browser, an OS cache) keeps serving the old answer; repeat three times.
+- **Pass line.** The recommendation in 10.1 holds if the dual-stack browsers, curl and Go reach the relay within about 1 s on case (a); clients that stall (as Python did) are listed by name in the user-facing notes.
 
 ### Sources (read 2026-11-17)
 
