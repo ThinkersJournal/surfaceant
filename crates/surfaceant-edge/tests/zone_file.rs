@@ -187,10 +187,19 @@ async fn two_a_records_are_one_rrset_with_no_priority() {
         let r = udp(e.udp, "multi.fixture.test.", RecordType::A).await;
         assert_eq!(r.answers.len(), 2);
         assert_eq!(r.answers[0].ttl, r.answers[1].ttl, "one RRset, one TTL");
-        orders.push(r.answers.iter().map(|a| a.data.to_string()).collect::<Vec<_>>().join(","));
+        orders.push(
+            r.answers
+                .iter()
+                .map(|a| a.data.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
     }
     println!("orders over 8 queries: {orders:?}");
-    let mut all: Vec<_> = orders.iter().flat_map(|o| o.split(',').map(String::from)).collect();
+    let mut all: Vec<_> = orders
+        .iter()
+        .flat_map(|o| o.split(',').map(String::from))
+        .collect();
     all.sort();
     all.dedup();
     assert_eq!(all, ["192.0.2.41", "192.0.2.42"]);
