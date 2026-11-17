@@ -349,10 +349,11 @@ The PSL maintainers ask for the number of people using subnames, so the registry
 Each slice is its own PR (one PR per day per project; several slices may share a PR when done together) and has a test that
 fails if it is wrong.
 
-1. **DNS server serving a copy of the zone.** A new crate `surfaceant-edge` with `hickory-server` loading a static export of
+1. **DNS server serving a copy of the zone** (built 0.0.19 against fixture zones; the real export, the Cloudflare diff and the items listed under *Slice 1 results* are still open). A new crate `surfaceant-edge` with `hickory-server` loading a static export of
    the zone; UDP and TCP on a high port in CI. Test with `dig`: apex SOA and NS, a name from the export, NXDOMAIN, a wildcard
    case, TCP, truncation to TCP for a large answer, `REFUSED` for an out-of-zone name. Runs on A and B with the diff script
    against Cloudflare. Also settles the UNVERIFIED hickory claims in section 1.1 (or switches to NSD/Knot).
+   *Slice 1 results (0.0.19, hickory-server 0.26.3, fixture zones only).* **Verified:** it serves UDP and TCP from a master file; apex SOA, NS, A, CAA; NODATA with SOA in authority; NXDOMAIN with AA; a record that exists beats the wildcard; a direct-child wildcard answer is owned by the queried name; a 4-record 1 KB TXT is truncated (TC, reply at most 512 bytes) on UDP without EDNS and whole on TCP; `REFUSED` out of zone on both transports. **Finding:** its file store applies `*.apex` at *any* depth, including below a name that exists (`x.alice` gets the wildcard address). RFC 4592 says NXDOMAIN there, and Cloudflare follows the RFC, so a static copy and Cloudflare differ for such names; the diff script in section 7 will show it, and slice 2's per-query synthesis is the fix, as section 1.1 argues. A test pins the deviation so a hickory upgrade that fixes it is noticed. **Still UNVERIFIED:** our own response-rate limiting, the EDNS 1232 cap, `ANY` handling, and a handler that synthesises per query (slice 2).
 2. **Database-backed answers**: `registry.db`, synthesis at any depth, reserved and suspended names, RRL, snapshot to B, the daily usage-log table (section 8.2).
 3. **Relay server** with the Worker's routes and limits on `registry.db` and `buffer.db`, **plus backups and the first restore
    drill** (before anything depends on it). Pass the existing e2e unchanged.

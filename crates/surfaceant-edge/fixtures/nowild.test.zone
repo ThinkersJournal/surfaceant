@@ -1,0 +1,14 @@
+; FIXTURE, NOT THE REAL ZONE. Made-up data for the made-up name nowild.test: the fixture without a wildcard,
+; so plain NXDOMAIN can be tested. Used only by surfaceant-edge tests.
+$ORIGIN nowild.test.
+$TTL 300
+@       IN SOA  ns1.nowild.test. hostmaster.nowild.test. ( 2026111701 3600 600 1209600 300 )
+@       IN NS   ns1.nowild.test.
+@       IN NS   ns2.nowild.test.
+@       IN A    192.0.2.10
+@       IN AAAA 2001:db8::10
+@       IN CAA  0 issue "letsencrypt.org"
+ns1     IN A    192.0.2.1
+ns2     IN A    192.0.2.2
+www     IN A    192.0.2.20
+alice   IN A    192.0.2.30
