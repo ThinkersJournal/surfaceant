@@ -1,0 +1,303 @@
+# Design note: SurfaceAnt on our own VPS edge (`thinkersjournal.net` on two nameservers)
+
+Docs only; no code. Status: **design for the PM and CireSnave to review, then build slice 1.**
+
+## What CireSnave ruled (board 457, option F, 2026-11-17, as relayed by the PM)
+
+`thinkersjournal.net` moves to CireSnave's two VPS nameservers; `thinkersjournal.com` stays on Cloudflare. The Cloudflare
+Worker deployed on `.net` is **temporary** and will move under the `.com` account/zone until the VPS edge exists. CireSnave
+accepts occasional outages "so long as nothing is permanently damaged". Mail is not in scope (a later decision).
+
+This **supersedes** option (e) of [`DESIGN-SUBDOMAINS.md`](DESIGN-SUBDOMAINS.md) (a delegated child zone `s.thinkersjournal.net`
+while Cloudflare keeps the rest). There is no `s` label now: the VPSs are authoritative for the whole zone, so a user's names
+are `<user>.thinkersjournal.net` and `<service>.<user>.thinkersjournal.net`, at any depth. Cloudflare's Universal SSL and
+route limits no longer apply to `.net`; options (c) and (e) there are the shape we are now building.
+
+Facts below are marked **verified** (read on the page cited, with its date), **inference**, or **UNVERIFIED** (must be tested
+in the slice named).
+
+## 1. What runs on the two VPSs
+
+Each box: 4 vCPU, 7.7 GB, Debian. Call them **A** (primary) and **B**. Box B also hosts staging, so everything runs in
+containers (Podman or Docker; one compose project per environment) with these isolation rules:
+
+- Staging is a separate compose project and network, with cgroup caps (for example 1 CPU, 2 GB) so a staging load test cannot
+  starve production DNS. No volume or secret is shared between staging and production.
+- Staging never binds port 53 or 443 on a production address. It uses an unprivileged port and a separate address or a private
+  (WireGuard) network.
+- Production containers on each box: `dns`, `relay` (box A only live; B warm standby), `edge` (TLS front, section 3), `page`
+  (section 4), `acme-api` (section 3). Host firewall (nftables) allows only 53/udp, 53/tcp, 80, 443, SSH (key only, from
+  known addresses) and WireGuard between A and B.
+
+### 1.1 Authoritative DNS
+
+- **Server: `hickory-server` (Rust).** Current stable on crates.io is 0.26.3 (2026-09-10; read from the crates.io API on
+  2026-11-17). Why: it is Rust (our shop, our dependency rules), serves UDP and TCP, and takes a custom request handler, so we
+  can **answer from our database instead of a zone file**. Alternatives (NSD, Knot DNS) are mature C servers; they stay the
+  fallback if hickory cannot meet the tests in slice 1, and the design does not depend on the choice (the database and the
+  tests are ours). **UNVERIFIED until slice 1:** that hickory's handler interface lets us synthesise answers per query, set
+  our own response-rate limiting, and keep UDP responses small.
+- **Why synthesise, not store a wildcard.** A static `*.thinkersjournal.net` record does not cover names *below* a name that
+  exists (the "empty non-terminal" rule of the DNS standard, RFC 4592): once `alice.thinkersjournal.net` has any record,
+  `x.alice.thinkersjournal.net` no longer matches the apex wildcard. We need every user name and any depth to resolve, with
+  per-user exceptions (suspended names, reserved names, `_acme-challenge` TXT), so a handler that computes the answer from
+  the database is simpler and correct for every depth.
+- **Answers.** Apex: SOA, NS (`ns1`, `ns2`), A/AAAA of the relay edge, CAA (issuance limited to Let's Encrypt and our ACME
+  account). Any other name: if its first label below the apex is a registered user (and not suspended): the edge's A/AAAA at
+  every depth. Reserved names (`www`, `admin`, `api`, `abuse`, `mail`, `hooks`, `connect`, `ns1`, `ns2`, as in the subdomain
+  note) are our own records. `_acme-challenge.<name>` TXT comes from the live ACME table. Unknown or suspended: NXDOMAIN
+  (suspension is therefore a name-level kill switch). No recursion: `REFUSED` for queries outside our zone; `ANY` answered
+  minimally.
+- **Two nameservers, glue.** `ns1.thinkersjournal.net` and `ns2.thinkersjournal.net` are inside the zone they serve, so the
+  registry needs **glue** (host records for both at the registrar). Registering the host records and changing the nameservers
+  is CireSnave's act at Dynadot only. Prefer two different networks or providers so one outage does not take both.
+- **Zone data.** From a **registry database** (section 1.2), not a zone file. Box A is the writer; box B pulls a signed
+  snapshot over WireGuard every few seconds and serves it read-only. If A is down, B keeps answering from its last snapshot
+  (names and addresses stay up; new users and ACME updates wait). Standard AXFR/NOTIFY cannot carry a synthesised zone (it
+  cannot be enumerated), which is why the snapshot is ours.
+- **Rate limiting and DoS posture:** per-source response-rate limiting (RRL), no large answers (cap UDP at EDNS 1232 bytes and
+  truncate to TCP), a per-source token bucket on queries, caps on TCP connections and idle time, drop malformed packets before
+  doing work, `ANY` and `DNSKEY` bulk answers disabled until DNSSEC exists. Public authoritative servers are amplification
+  targets; RRL plus small answers is the control. See section 5.
+- **DNSSEC.** Not in the first slices. Signing adds a key to custody and a failure mode (a bad signature or DS makes every
+  validating resolver fail the whole zone). Decide after the zone has run unsigned; **if the Cloudflare zone currently has
+  DNSSEC on, its DS record at the registrar must be removed before the cutover** (section 7).
+
+### 1.2 State, in two stores
+
+Two SQLite files (WAL), on box A, so the durable and the disposable never share a backup:
+
+- `registry.db` (**durable**): users, services/channels (id, token hash, abuse contact, disabled flag), names and reserved
+  list, suspensions, the audit log, and the live ACME TXT rows (short-lived). Replicated to B (snapshot) and backed up
+  (section 5).
+- `buffer.db` (**disposable**): buffered events with the 5-minute TTL (board 447). **Never backed up and never replicated**:
+  it holds payloads, and the retention statement promises they are dropped after about 5 minutes.
+
+## 2. The relay re-hosted as a server
+
+Same wire protocol, so `surfaceant-client` does not change except for its relay URL. The re-expression of the Worker +
+Durable Object model, piece by piece:
+
+| Cloudflare model | On the VPS |
+|---|---|
+| Worker router (`/hooks/<id>`, `/connect/<id>`, `/admin/...`) | One Rust server (`axum` + `tokio`; `axum` is at 0.8.9 on crates.io, `tokio` 1.54.1) with the **same routes, status codes and bodies**: `404` for an unknown or forged id without touching state, `405` on other methods, `401`, `410` for disabled, `413`, `429` + `Retry-After` |
+| One Durable Object per channel | One in-process **actor per channel** (a `tokio` task owning an `mpsc` mailbox and the live socket), created on first use; the actor serialises writes exactly as the DO did |
+| DO SQLite `events` table | `buffer.db` table with `(channel_id, seq)`; `seq` is assigned by the channel actor inside one transaction (per-channel order, as today); `delivery_id` unique per channel gives the same idempotency |
+| DO alarm (TTL sweep) | A sweeper task deleting rows older than `BUFFER_TTL_SECONDS` (default 300) every few seconds, plus per-channel cap enforcement (1,000 events or 64 MiB, oldest first, counted into the next `welcome` as `dropped_events`) |
+| Hibernation API | Not needed: an idle WebSocket on our own server costs a socket and a little memory, not billed duration. Keep ping/pong so half-open sockets are found; a new connection still **replaces** the old one (`error{code:"replaced"}`) |
+| Worker secrets `CHANNEL_KEY`, `ADMIN_SECRET` | Files read at start from the host's secret store (Podman/Docker secrets or systemd credentials), never in git, never in the image. `CHANNEL_KEY` is the HMAC key of every channel id: losing it invalidates all of them, so it is in the backup set (section 5) |
+| Worker vars (`MAX_BODY_BYTES`, `RATE_PER_SEC`, ...) | Same names, as environment variables with the same defaults |
+| Per-channel token bucket | In the actor, same numbers |
+
+Re-used, not rewritten: `surfaceant-proto` (the frames) and `worker/src/logic.rs` (`make_channel_id`, `channel_id_is_valid`,
+`hash_token`, `secret_eq`, `bearer`, `delivery_id_from`, `forward_header`, `abuse_contact_is_valid`), which depend only on
+`hmac`, `sha2` and `subtle`, so they move to a shared crate used by both the Worker and the server. That also lets the
+Worker keep working as the interim relay.
+
+**Proof the protocol is unchanged:** the existing end-to-end example (`cargo run -p surfaceant-client --example e2e`: signed
+sample, offline replay, duplicate, tampered-byte negative control, disable) and the shared test vectors must pass against the
+new server with no edit to the client. That is the acceptance test of slice 3.
+
+Failure behaviour: a restart loses nothing durable (registry is in SQLite; the buffer is in SQLite too and survives a process
+restart, only the 5-minute TTL discards it); clients reconnect with `last_acked_seq` as today. A **box A outage** stops
+delivery for its duration and drops buffered events past the TTL: accepted by CireSnave; senders see 5xx and retry (GitHub
+redelivery is manual). Moving the relay to box B is a manual step (restore `registry.db`, start the container, switch the A
+records, section 5); it is not automatic because two live relays would split a channel's state.
+
+## 3. TLS
+
+### 3.1 Our own wildcard `*.thinkersjournal.net` (and the apex), by DNS-01, locally
+
+We are the authoritative server, so the ACME client writes the `_acme-challenge` TXT straight into `registry.db`; no DNS
+provider API. A wildcard needs DNS-01 (verified: Let's Encrypt challenge-types page, last updated 2026-02-12: HTTP-01 and
+TLS-ALPN-01 "cannot be used" for wildcards). Sequence: write the TXT, **wait until box B has picked it up** (otherwise the CA
+may query the nameserver that lacks it), tell the CA, then delete the TXT. ACME client: `instant-acme` (0.8.5, 2026-02-24,
+async Rust; **UNVERIFIED** that it fits the flow without change, checked in slice 4). Renew early (one third of the
+lifetime left) and alert on failure; the key lives on the box, outside the image.
+
+This certificate covers **one label**: `alice.thinkersjournal.net`, `www`, `hooks`, the apex. It does not cover
+`mail.alice.thinkersjournal.net`.
+
+### 3.2 Per-user wildcards for the user's own software (their key stays on their machine)
+
+For a nested service (`mail.alice.thinkersjournal.net`) the user's software gets its own certificate for
+`*.alice.thinkersjournal.net` from Let's Encrypt, using **its own ACME account and private key**; we never see either. We
+provide only the DNS-01 helper, an **ACME-DNS-style API** on `acme-api`:
+
+- The user's service token (the same bearer secret the client already holds) authorises `present` and `cleanup` calls in the
+  shape of the `httpreq` DNS provider that common ACME clients ship (a POST with `fqdn` and `value`; **UNVERIFIED** against
+  the exact current client specs, confirmed in slice 6), so unmodified clients work.
+- It may write **only** `_acme-challenge.<user>.thinkersjournal.net` and `_acme-challenge.<label>.<user>.thinkersjournal.net`
+  for the caller's own `<user>`. At most two live TXT values per name, each expiring after ten minutes. This is the ownership
+  check the design needs: nobody can obtain a certificate for a name they do not control.
+- Test against Let's Encrypt **staging** first.
+
+### 3.3 SNI passthrough
+
+The edge listens on 443 and reads the TLS ClientHello's SNI without terminating:
+
+- SNI with **one** label below the apex (`alice.`, `www.`, `hooks.`, the apex): we terminate with our wildcard (the user page,
+  events mode `/hooks/<id>`).
+- SNI with **two or more** labels under a registered user: **passthrough**, a raw byte stream tunnelled to the user's connected
+  client; the user's software terminates TLS with its own certificate. We see SNI, volumes and timing, never content.
+- Unknown SNI: closed without a response. Encrypted ClientHello is not offered by us, so SNI is visible to route on.
+- Port 80: redirect to HTTPS for names we terminate; nothing is tunnelled on port 80.
+
+Passthrough needs a **stream tunnel** in the relay protocol (multiplexed streams over the client's existing WebSocket). That
+is surface mode (ROADMAP row 6), reserved in `DESIGN.md` section 6 as the `kind: surface` frame set; it gets its own design
+note and its own gate before slice 7. Until it exists, nested names resolve and our wildcard serves the one-label names only.
+
+### 3.4 Let's Encrypt limits at launch size (read 2026-11-17 on the Let's Encrypt rate-limits page, last updated 2026-08-05)
+
+| Limit | Value | Meaning for us |
+|---|---|---|
+| New certificates per registered domain | 50 per 7 days (global, all accounts); override by request form | The binding limit, see below |
+| New certificates per exact identifier set | 5 per 7 days, no override | Do not loop a failing issuance; our own wildcard is one set |
+| Failed authorizations per identifier per account | 5 per hour, no override | A broken helper retried in a loop locks the name for an hour: back off |
+| New orders per account | 300 per 3 hours | Not a concern: each user has their own account |
+| Accounts per IP | 10 per 3 hours | A user's own address; not ours |
+| ARI renewals | exempt from all limits (the page: non-ARI renewals are exempt from the orders and registered-domain limits only) | Renewals do not use up the 50 |
+
+"Registered domain" is determined from the Public Suffix List (the page says it uses the PSL and gives
+`new.blog.example.co.uk` -> `example.co.uk`). **Inference, not stated on the page:** until `thinkersjournal.net` is itself on
+the PSL, the registered domain is `thinkersjournal.net` for every user, so **all users' first issuances plus our own wildcard
+share 50 per week**: about 50 new users a week, at most. After a PSL entry each `<user>.thinkersjournal.net` would be its own
+registered domain and the limit stops being shared (**inference**, verify with Let's Encrypt before relying on it). Mitigation
+if the PSL is refused: the rate-limit adjustment form (the page says it takes a few weeks and covers registered-domain limits)
+or an additional ACME CA, since `instant-acme` and the clients speak ACME generally (**UNVERIFIED** which CAs fit).
+
+## 4. The per-user page
+
+Served by `page` at `<user>.thinkersjournal.net`, terminated with our wildcard. Static content built from the database and
+escaped; **no user-supplied HTML, no cookies, no scripts from other origins**, a strict CSP, `Referrer-Policy: no-referrer`.
+
+- Name, created date, online or offline, the relay's name, a link to the user's **public ThinkersJournal.com profile**.
+- An **abuse-report form** that feeds the normal ThinkersJournal.com abuse mechanism (illegal content follows board 119, not a
+  new pipeline). The page posts to an endpoint the Community lane owns; the interface (URL, auth, fields) is a dependency to
+  agree before slice 5. The form is rate limited per source and per user; the reporter's address is held only in memory for
+  the limiter.
+- **Never shows a user's real IP address**, or anything derived from it, and the relay never sends it to any page: a user's
+  client connects outward to us, and every public record points at the edge. The service's own abuse contact (board 447) is
+  shown beside ThinkersJournal's.
+
+## 5. Abuse, DoS, backup and restore
+
+### 5.1 Posture
+
+| Threat | Control | Residual |
+|---|---|---|
+| DNS amplification / reflection | RRL, small answers, no `ANY`, no recursion, EDNS 1232 | A flood still fills a box's link; the provider may null-route it: an outage, accepted |
+| Volumetric flood on two public IPs | Provider-level protection if offered; short outages accepted ("so long as nothing is permanently damaged") | **No Cloudflare shield on `.net` any more**: this is the cost of option F |
+| TLS/TCP exhaustion, slowloris | Per-source connection caps, ClientHello and idle timeouts, drop unknown SNI | Same |
+| Webhook floods to `/hooks/<id>` | Existing limits (1 MiB, 10 req/s burst 50 -> 429, caps) plus a per-source limit at the edge | |
+| Abusive user content | We cannot read passthrough traffic. Kill switches, at once and without a deploy: stop answering for the name (NXDOMAIN), deny the SNI, drop the tunnel, revoke the ACME token, suspend the account's services; the policy text is in `NOTICE-AND-TERMS.md` | A certificate already issued stays valid, but the name no longer resolves |
+| Compromise of a box | Containers, firewall, no secrets in images, key-only SSH, secrets in the host store; box B has staging, so keep it apart | Rotate `CHANNEL_KEY` only by reissuing every channel id |
+
+Logging as ruled: status, channel-id hash and size; never bodies or headers; metadata kept 7 days.
+**`NOTICE-AND-TERMS.md` section 3 must change at cutover**: it says traffic is encrypted to Cloudflare. After the move the
+operator terminates TLS for first-label names (and can read events), and cannot read passthrough traffic.
+
+### 5.2 What is backed up
+
+| Item | Backed up | Why |
+|---|---|---|
+| `registry.db` | Yes: SQLite online backup every 15 minutes, encrypted (age), copied to the other VPS and to one off-provider store, 14 daily and 4 weekly kept | Users, channels, token hashes, names: irreplaceable |
+| Secrets: `CHANNEL_KEY`, `ADMIN_SECRET`, the ACME account key (and DNSSEC keys if ever used) | Yes, in CireSnave's custody store as `DEPLOY.md` already describes, not in the database backup | Losing `CHANNEL_KEY` invalidates every channel id |
+| Certificates and private keys | No | Reissued in minutes by DNS-01 |
+| `buffer.db` | **No** | Payloads; the 5-minute retention promise |
+| Compose files, config, the container build | In git | |
+| The domain registration and registrar account | n/a | CireSnave's; expiry is a "permanently damaged" risk, so auto-renew and a calendar alert |
+
+### 5.3 Restore
+
+Target: **recovery point 15 minutes, recovery time about an hour, by hand.** Steps: provision a Debian box and the compose
+project from git; restore secrets from custody; decrypt and restore the latest `registry.db`; start `dns`, then `relay`;
+change the relay A/AAAA (low TTL) if the address changed; check with `dig` from outside and the e2e example. A **restore drill
+once a month** onto the staging box, the e2e example as the pass test: an untested backup is not one. If box A is lost, B
+already serves DNS from its last snapshot; the manual steps above promote B.
+
+## 6. Out of scope
+
+Mail (a later decision). Self-service signup (still admin-issued channels; launch scope stays people CireSnave names). HTTP
+content proxying by the edge (we do not read passthrough traffic; surface mode is row 6).
+
+## 7. Cutover and rollback
+
+The Cloudflare zone for `thinkersjournal.net` is **kept intact as the fallback**. The nameserver change at Dynadot is
+**CireSnave's act only**; no lane touches it.
+
+Before any change:
+
+1. Export every record of the Cloudflare `.net` zone (dashboard or API, by a person with the access; no lane has the
+   credentials). **Check DNSSEC**: if enabled, remove the DS at the registrar *first* and wait out its TTL, or validating
+   resolvers will fail the whole zone after the move.
+2. Slice 1's static zone on A and B must answer **identically to Cloudflare for every exported name** (a diff script over
+   `dig`, run against all three). Then the DB-backed synthesis must match the same results.
+3. The relay must already be running and passing e2e on the VPS (slices 3-4), and the interim Worker moved under the `.com`
+   account/zone. **Open for the PM:** the Worker's hostname and hook URL on `.com` differ from today's
+   `https://thinkersjournal.net/hooks/<id>`, so senders (GitHub webhooks) and clients need the new URL, and
+   `DEPLOY.md` and the README change.
+4. Rehearse the whole sequence on a scratch domain CireSnave is willing to move (an open question below).
+
+The move:
+
+5. CireSnave registers the glue host records for `ns1` and `ns2` at Dynadot, then switches the nameservers.
+6. Watch from several public resolvers: SOA serial, a user name, NXDOMAIN, TCP, the relay's hook URL, certificate validity.
+   Resolvers cache the old NS set for up to the parent's TTL (typically up to 48 hours, set by the registry; **UNVERIFIED for
+   `.net`, read it from the registry's delegation**), so both sets must stay identical for that window: **every record change
+   is written to both Cloudflare and the VPS until decommission**.
+7. Keep Cloudflare's zone as fallback for at least two weeks of clean running before anything is removed.
+
+Rollback (any time before step 7): CireSnave switches the nameservers back at Dynadot; because both sets were kept identical,
+the caches of either are correct. Triggers: DNS errors above a few percent for ten minutes, certificate failure on the hook
+host, or the relay failing e2e against the real name. After rollback, the interim Worker keeps serving `.com`.
+
+## 8. Public Suffix List
+
+`thinkersjournal.net` must be on the PSL's private section before any public user-controlled web content, so one user's
+cookies cannot reach another's and so Let's Encrypt limits stop being shared (section 3.4). From the PSL guidelines page
+(last edited 2025-05-23):
+
+- The **domain owner's authorised representative submits** (a pull request to `publicsuffix/list`); "we will not accept
+  patches submitted by third party users". That is CireSnave or the legal entity, not a bot lane.
+- Put a `_psl` **TXT** record at `_psl.thinkersjournal.net` whose value is the pull-request URL, and **leave it in place**
+  after validation. It is served by our own DNS.
+- The domain must have **more than two years of registration left** at submission, with a commitment to keep it so: check the
+  Dynadot expiry first.
+- The description gives why, the expected input and output, wildcards used, and the number of domains; run the list's
+  `make test`; the entry is sorted by company name; follow the ticket until closed.
+- **Risk: it can be refused until there are users.** The page says projects "not serving more then thousands of users are
+  quite likely to be declined" and small, temporary, lab or beta projects "will likely be declined"; there is no service level
+  on time and downstream copies lag. Plan for refusal at launch.
+
+If refused or pending: launch stays events-only, one label (our wildcard, no user-controlled web content), people CireSnave
+names; no per-user wildcards beyond the 50-a-week budget; surface mode and passthrough wait. Submitting is an external act made
+only on CireSnave's word.
+
+## 9. Build order, smallest slice first
+
+Each slice is its own PR (one PR per day per project; several slices may share a PR when done together) and has a test that
+fails if it is wrong.
+
+1. **DNS server serving a copy of the zone.** A new crate `surfaceant-edge` with `hickory-server` loading a static export of
+   the zone; UDP and TCP on a high port in CI. Test with `dig`: apex SOA and NS, a name from the export, NXDOMAIN, a wildcard
+   case, TCP, truncation to TCP for a large answer, `REFUSED` for an out-of-zone name. Runs on A and B with the diff script
+   against Cloudflare. Also settles the UNVERIFIED hickory claims in section 1.1 (or switches to NSD/Knot).
+2. **Database-backed answers**: `registry.db`, synthesis at any depth, reserved and suspended names, RRL, snapshot to B.
+3. **Relay server** with the Worker's routes and limits on `registry.db` and `buffer.db`, **plus backups and the first restore
+   drill** (before anything depends on it). Pass the existing e2e unchanged.
+4. **TLS** for our wildcard by local DNS-01; the relay served over HTTPS on staging, then on the real names.
+5. **User page and abuse form** (needs the Community lane's endpoint).
+6. **ACME API** for per-user wildcards, against Let's Encrypt staging.
+7. **Stream tunnel and SNI passthrough** (row 6's own design and gate; needs the PSL decision).
+8. **Cutover** (section 7), after the rehearsal.
+
+## Open questions
+
+- **PM:** the Worker's temporary hostname on `.com` and the hook-URL change; whether the abuse-form endpoint can be agreed
+  with the Community lane now.
+- **CireSnave:** the VPS providers and addresses (two networks?); Dynadot expiry of `thinkersjournal.net` (the PSL needs more
+  than two years); the off-provider backup destination; a scratch domain for the rehearsal; DNSSEC yes or no; who restores
+  and who is told during an outage.
+
+-- lane: surfaceant

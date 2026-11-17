@@ -1,5 +1,9 @@
 # Design note: user-controlled services on `*.thinkersjournal.net`
 
+> **2026-11-17: superseded in part.** Board 457 (option F) moves all of `thinkersjournal.net` to our two VPS nameservers, so option (e)
+> below (a delegated child zone `s`) and the Cloudflare TLS limits no longer apply; see [`DESIGN-VPS-EDGE.md`](DESIGN-VPS-EDGE.md).
+> The naming, abuse and per-person sections still stand. The "Nested names" facts are kept as the record.
+
 Docs only; no code. Status: **options for CireSnave, awaiting a ruling.** Launch scope stays "people CireSnave names"
 (admin-issued channels) until this is ruled.
 

@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.17
+
+- docs: `docs/DESIGN-VPS-EDGE.md` (board 457, option F): `thinkersjournal.net` on two VPS nameservers; authoritative DNS (hickory-server), the relay re-hosted as a server on the same wire protocol, our own wildcard and per-user wildcard TLS with SNI passthrough, user page, backups and restore, cutover and rollback, Public Suffix List, build order. Supersedes option (e) of `DESIGN-SUBDOMAINS.md`.
+
 ## 0.0.16
 
 - docs: DESIGN-SUBDOMAINS.md option (e), one delegated child zone on two VPS nameservers, with the delegation facts (verified/UNVERIFIED); option (d) corrected with the NS and zone-record limits. Live smoke result recorded in DEPLOY.md, ROADMAP row 4 (done) and README; CPU/cold start still not measured.
