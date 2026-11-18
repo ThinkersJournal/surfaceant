@@ -103,7 +103,11 @@ fn pick(all: Vec<Data>, t: QType) -> Answer {
     } else {
         of_type(&all, t)
     };
-    if r.is_empty() { Answer::NoData } else { Answer::Records(r) }
+    if r.is_empty() {
+        Answer::NoData
+    } else {
+        Answer::Records(r)
+    }
 }
 
 impl Synth {
@@ -149,7 +153,11 @@ impl Synth {
 
         if let Some(own) = self.registry.reserved.get(owner) {
             // Reserved names are our own single records; nothing exists below them.
-            return if depth == 1 { pick(own.clone(), qtype) } else { Answer::NxDomain };
+            return if depth == 1 {
+                pick(own.clone(), qtype)
+            } else {
+                Answer::NxDomain
+            };
         }
         if self.registry.suspended.contains(owner) || !self.registry.users.contains(owner) {
             return Answer::NxDomain;
@@ -157,11 +165,11 @@ impl Synth {
         // `_acme-challenge.<user>[.<more>]`: TXT from the live table; the name exists only
         // while a challenge is live (otherwise it falls through to the edge address below,
         // so a CNAME-free DNS-01 lookup still gets NODATA for TXT).
-        if rel.starts_with("_acme-challenge.") || rel == "_acme-challenge" {
-            if let Some(vals) = self.registry.acme.get(&name) {
-                let all: Vec<Data> = vals.iter().cloned().map(Data::Txt).collect();
-                return pick(all, qtype);
-            }
+        if (rel.starts_with("_acme-challenge.") || rel == "_acme-challenge")
+            && let Some(vals) = self.registry.acme.get(&name)
+        {
+            let all: Vec<Data> = vals.iter().cloned().map(Data::Txt).collect();
+            return pick(all, qtype);
         }
         pick(self.edge_records(), qtype)
     }
@@ -178,10 +186,8 @@ mod tests {
         r.suspended.insert("bob".into());
         r.reserved
             .insert("www".into(), vec![Data::A("192.0.2.20".parse().unwrap())]);
-        r.acme.insert(
-            "_acme-challenge.alice.zone.test".into(),
-            vec!["tok".into()],
-        );
+        r.acme
+            .insert("_acme-challenge.alice.zone.test".into(), vec!["tok".into()]);
         Synth {
             apex: "zone.test".into(),
             edge: Edge {
@@ -189,7 +195,7 @@ mod tests {
                 aaaa: vec!["2001:db8::10".parse().unwrap()],
             },
             ns: vec!["ns1.zone.test".into()],
-            caa: vec!["0 issue \"letsencrypt.org\"".into()],
+            caa: vec!["letsencrypt.org".into()],
             registry: r,
         }
     }
@@ -197,7 +203,11 @@ mod tests {
     #[test]
     fn user_name_resolves_at_every_depth() {
         let s = synth();
-        for n in ["alice.zone.test", "x.alice.zone.test", "a.b.c.alice.zone.test."] {
+        for n in [
+            "alice.zone.test",
+            "x.alice.zone.test",
+            "a.b.c.alice.zone.test.",
+        ] {
             assert_eq!(
                 s.answer(n, QType::A),
                 Answer::Records(vec![Data::A("192.0.2.10".parse().unwrap())]),
@@ -236,7 +246,10 @@ mod tests {
     #[test]
     fn case_and_trailing_dot_are_ignored() {
         let s = synth();
-        assert!(matches!(s.answer("ALICE.Zone.Test.", QType::A), Answer::Records(_)));
+        assert!(matches!(
+            s.answer("ALICE.Zone.Test.", QType::A),
+            Answer::Records(_)
+        ));
     }
 
     #[test]
@@ -247,19 +260,28 @@ mod tests {
             Answer::Records(vec![Data::Txt("tok".into())])
         );
         // No live challenge: the name exists (user's), no TXT.
-        assert_eq!(s.answer("_acme-challenge.carol.zone.test", QType::Txt), Answer::NxDomain);
+        assert_eq!(
+            s.answer("_acme-challenge.carol.zone.test", QType::Txt),
+            Answer::NxDomain
+        );
         assert_eq!(s.answer("x.alice.zone.test", QType::Txt), Answer::NoData);
     }
 
     #[test]
     fn apex_records_and_minimal_any() {
         let s = synth();
-        assert_eq!(s.answer("zone.test", QType::Soa), Answer::Records(vec![Data::Soa]));
+        assert_eq!(
+            s.answer("zone.test", QType::Soa),
+            Answer::Records(vec![Data::Soa])
+        );
         assert_eq!(
             s.answer("zone.test", QType::Ns),
             Answer::Records(vec![Data::Ns("ns1.zone.test".into())])
         );
-        assert_eq!(s.answer("zone.test", QType::Any), Answer::Records(vec![Data::Soa]));
+        assert_eq!(
+            s.answer("zone.test", QType::Any),
+            Answer::Records(vec![Data::Soa])
+        );
         // Never more than one record for ANY on a user name.
         match s.answer("alice.zone.test", QType::Any) {
             Answer::Records(r) => assert_eq!(r.len(), 1),

@@ -1303,6 +1303,7 @@ dependencies = [
 name = "surfaceant-edge"
 version = "0.0.19"
 dependencies = [
+ "async-trait",
  "hickory-proto",
  "hickory-server",
  "tokio",

@@ -2,6 +2,7 @@
 //! standard master file (`docs/DESIGN-VPS-EDGE.md` section 9). Later slices replace the file
 //! with database-backed synthesis; the server wiring here stays.
 
+pub mod handler;
 pub mod synth;
 
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
@@ -19,8 +20,8 @@ use hickory_server::{
 pub const TCP_IDLE: Duration = Duration::from_secs(5);
 
 /// A running server and the addresses it actually bound (port 0 resolves here).
-pub struct Edge {
-    pub server: Server<Catalog>,
+pub struct Edge<H: hickory_server::server::RequestHandler = Catalog> {
+    pub server: Server<H>,
     pub udp: SocketAddr,
     pub tcp: SocketAddr,
 }
@@ -39,8 +40,15 @@ pub async fn serve(origin: &str, zone_file: &Path, bind: SocketAddr) -> Result<E
     )?;
     let mut catalog = Catalog::new();
     catalog.upsert(LowerName::new(&origin), vec![Arc::new(handler)]);
+    bind_both(catalog, bind).await
+}
 
-    let mut server = Server::new(catalog);
+/// Serve any handler (slice 2: [`handler::EdgeHandler`]) on UDP and TCP at `bind`.
+pub async fn bind_both<H: hickory_server::server::RequestHandler>(
+    handler: H,
+    bind: SocketAddr,
+) -> Result<Edge<H>, String> {
+    let mut server = Server::new(handler);
     // UDP and TCP share one port number. With port 0 the OS picks the UDP port, and the same
     // number can be taken for TCP, so retry a few times instead of failing the first collision.
     let attempts = if bind.port() == 0 { 20 } else { 1 };
