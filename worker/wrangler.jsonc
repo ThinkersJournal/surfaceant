@@ -1,0 +1,17 @@
+{
+  "name": "surfaceant",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": { "bindings": [{ "name": "CHANNEL", "class_name": "Channel" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Channel"] }],
+  // Tunable limits (design note section 4). Secrets CHANNEL_HMAC_KEY and ADMIN_TOKEN are set with
+  // `wrangler secret put`, never committed.
+  "vars": {
+    "MAX_BODY_BYTES": "1048576",
+    "TTL_SECONDS": "86400",
+    "MAX_EVENTS": "1000",
+    "MAX_BUFFER_BYTES": "67108864",
+    "RATE_PER_SECOND": "10",
+    "RATE_BURST": "50"
+  }
+}
