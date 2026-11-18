@@ -26,7 +26,7 @@ containers (Podman or Docker; one compose project per environment) with these is
 - Staging never binds port 53 or 443 on a production address. It uses an unprivileged port and a separate address or a private
   (WireGuard) network.
 - Production containers on each box: `dns`, `relay` (box A only live; B warm standby), `edge` (TLS front, section 3), `page`
-  (section 4), `acme-api` (section 3). Host firewall (nftables) allows only 53/udp, 53/tcp, 80, 443, SSH (key only, from
+  (section 4), `acme-api` (section 3). Host firewall (nftables) allows only 53/udp, 53/tcp, 443, SSH (key only, from
   known addresses) and WireGuard between A and B.
 
 ### 1.1 Authoritative DNS
@@ -140,8 +140,8 @@ The edge listens on 443 and reads the TLS ClientHello's SNI without terminating:
   events mode `/hooks/<id>`).
 - SNI with **two or more** labels under a registered user: **passthrough**, a raw byte stream tunnelled to the user's connected
   client; the user's software terminates TLS with its own certificate. We see SNI, volumes and timing, never content.
-- Unknown SNI: closed without a response. Encrypted ClientHello is not offered by us, so SNI is visible to route on.
-- Port 80: redirect to HTTPS for names we terminate; nothing is tunnelled on port 80.
+- Not a TLS ClientHello, or unknown SNI: closed without a response. Encrypted ClientHello is not offered by us, so SNI is visible to route on.
+- Port 80: closed. No plain-HTTP listener and no redirect (section 3.6); nothing is tunnelled on port 80.
 
 Passthrough needs a **stream tunnel** in the relay protocol (multiplexed streams over the client's existing WebSocket). That
 is surface mode (ROADMAP row 6), reserved in `DESIGN.md` section 6 as the `kind: surface` frame set; it gets its own design
@@ -189,6 +189,21 @@ week in section 3.4 is shared by every user, so the plan beyond it is, in order:
    2026-11-17, so no claim about their limits is made. Read them by hand before naming either.
 5. Beyond that, new nested-service users **queue** (a waiting list shown on the user page), rather than failing: events mode
    and the page keep working without a certificate of their own.
+
+### 3.6 Secure protocols only (CireSnave 2026-11-17, relayed by the PM)
+
+CireSnave's rule for the relay and the edge, in his words in substance: we do not design around insecure protocols. *"Security in network protocols was added for a reason. Network protocols that are secure would never accept a connection to a wrong server. That issue is not something I want us to work around."* As design rules:
+
+1. **The edge and the relay accept only authenticated, encrypted protocols:** TLS with certificate validation for the name the client asked for (`https://`, `wss://`). No plain-HTTP listener, no plain-WebSocket, no unauthenticated passthrough: on 443 the edge requires a TLS ClientHello with an SNI that is ours, and closes anything else without a response (section 3.3). A passthrough stream is only a TLS stream whose server certificate the *client* validates for the name.
+2. **A plain-HTTP request is refused at the edge.** Nothing listens on **80/tcp** (the firewall in section 1 does not open it, so the connection is refused); there is no redirect service. A client that types `http://` gets a connection error, not a redirect: a redirect would be an unauthenticated response we chose to serve.
+3. **Port 80 is not needed.** ACME for our wildcard (section 3.1) and for users' certificates (section 3.2, through `acme-api`) is **DNS-01** only; HTTP-01 is not offered (a user's software that wants a certificate for a single name uses DNS-01 through the same API). TLS-ALPN-01 would arrive on 443 but is not part of this design.
+4. **What a stale or wrong address means.** If a name's address now belongs to someone else (a dynamic address that changed and was reassigned, section 10), a client that reaches it fails certificate validation for the name and gets an error. We do not add anything to make that case work or hide it. It is an **availability** problem only: a client does not move on to the next address after a TLS failure (inference from how connection fallback works, section 10.1; not yet measured, case (f) in 10.7), so the record must be corrected fast: health probe and short TTL (section 10.2).
+5. **Authoritative DNS on 53 is the one protocol here that is not authenticated**, because every resolver speaks it that way; DNSSEC is the authenticated form and is a separate decision (section 1.1). This rule is about the services we build on top of it.
+6. **Interim Worker.** What the temporary Cloudflare Worker does on port 80 for `thinkersjournal.net` is Cloudflare's configuration and is **UNVERIFIED** here; check it when the Worker moves under `.com` (ROADMAP row 4b) and turn on any "always use HTTPS" or HSTS setting the zone offers.
+
+7. **The client library is held to the same rule (PM ruling LOOPBACK-ONLY, 2026-11-17; closed).** `surfaceant-client` accepts `ws://` only when the relay host **resolves** to loopback (`127.0.0.0/8`, `::1`, every answer; the resolved address is checked and then connected to, never the string and never a second lookup), so `wrangler dev` and the e2e job keep working; everything else must be `wss://` with certificate validation, and a `ws://` to any other host stops the client with an error that names the rule. Tests in `crates/surfaceant-client/tests/relay_scheme.rs`, written red first: `ws_to_a_public_address_is_refused_naming_the_rule`, `a_name_that_resolves_to_a_private_non_loopback_address_is_refused` (including a name that starts with `localhost`), `every_resolved_address_must_be_loopback`, `loopback_addresses_are_accepted` (positive control), `ws_to_loopback_is_accepted_and_reaches_the_connection`, `ws_to_loopback_completes_a_real_websocket_handshake_and_sends_hello` (the path the e2e job uses), `a_lookalike_name_does_not_pass_on_its_string`, `wss_to_an_invalid_certificate_is_refused` (the server side is checked to have seen the client abort the handshake). This narrows what the client accepts: breaking for a non-loopback `ws://` (pre-0.1 note).
+
+The rule is a term for users: see `NOTICE-AND-TERMS.md` section 4, item 7.
 
 ## 4. The per-user page
 
@@ -349,10 +364,12 @@ The PSL maintainers ask for the number of people using subnames, so the registry
 Each slice is its own PR (one PR per day per project; several slices may share a PR when done together) and has a test that
 fails if it is wrong.
 
-1. **DNS server serving a copy of the zone.** A new crate `surfaceant-edge` with `hickory-server` loading a static export of
+1. **DNS server serving a copy of the zone** (built 0.0.19 against fixture zones; the real export, the Cloudflare diff and the items listed under *Slice 1 results* are still open). A new crate `surfaceant-edge` with `hickory-server` loading a static export of
    the zone; UDP and TCP on a high port in CI. Test with `dig`: apex SOA and NS, a name from the export, NXDOMAIN, a wildcard
    case, TCP, truncation to TCP for a large answer, `REFUSED` for an out-of-zone name. Runs on A and B with the diff script
    against Cloudflare. Also settles the UNVERIFIED hickory claims in section 1.1 (or switches to NSD/Knot).
+   *Slice 1 results (0.0.19, hickory-server 0.26.3, fixture zones only).* **Verified:** it serves UDP and TCP from a master file; apex SOA, NS, A, CAA; NODATA with SOA in authority; NXDOMAIN with AA; a record that exists beats the wildcard; a direct-child wildcard answer is owned by the queried name; a 4-record 1 KB TXT is truncated (TC, reply at most 512 bytes) on UDP without EDNS and whole on TCP; `REFUSED` out of zone on both transports. **Finding:** its file store applies `*.apex` at *any* depth, including below a name that exists (`x.alice` gets the wildcard address). RFC 4592 says NXDOMAIN there, and Cloudflare follows the RFC, so a static copy and Cloudflare differ for such names; the diff script in section 7 will show it, and slice 2's per-query synthesis is the fix, as section 1.1 argues. A test pins the deviation so a hickory upgrade that fixes it is noticed. **Still UNVERIFIED:** our own response-rate limiting, the EDNS 1232 cap, `ANY` handling, and a handler that synthesises per query (slice 2).
+   **KNOWN DIFFERENCE from Cloudflare (hickory-server 0.26.3, found in slice 1; PM 2026-11-17: keep it visible).** Over a zone with an apex wildcard, a name below an existing name (`x.alice.<zone>` when `alice` exists) gets the wildcard's address from hickory's file store; RFC 4592 section 3.3.1 and Cloudflare answer NXDOMAIN. A name that resolves on one server and not the other is a cutover regression in either direction, so the section 7 diff must cover names at depth two and deeper, and slice 2 must either synthesise per query (our plan) or carry a patched store; until then no static copy is served for real. Pinned by the test `hickory_file_store_wildcard_matches_at_any_depth_unlike_rfc4592` in `crates/surfaceant-edge/tests/zone_file.rs` (fails when an upgrade fixes it). **Upstream:** already reported as hickory-dns/hickory-dns#3893 (open, 2026-09-06: the climb passes existing names; the same issue also lists a type-miss taking the wildcard and a NODATA returned as NXDOMAIN, which we have not reproduced), so we filed nothing; #1342 is a different report and #1275 is unrelated.
 2. **Database-backed answers**: `registry.db`, synthesis at any depth, reserved and suspended names, RRL, snapshot to B, the daily usage-log table (section 8.2).
 3. **Relay server** with the Worker's routes and limits on `registry.db` and `buffer.db`, **plus backups and the first restore
    drill** (before anything depends on it). Pass the existing e2e unchanged.
@@ -361,6 +378,85 @@ fails if it is wrong.
 6. **ACME API** for per-user wildcards, against Let's Encrypt staging.
 7. **Stream tunnel and SNI passthrough** (row 6's own design and gate; needs the PSL decision).
 8. **Cutover** (section 7), after the rehearsal.
+
+## 10. Direct mode (design; docs only; PM [TASK] design-direct-mode, 2026-11-17)
+
+CireSnave asked whether a user's names could be answered with the user's own stable IPv6 (`AAAA`) so most traffic skips the relay, and whether a rotating IPv4 could be published as the primary with the relay as fallback. Facts are marked **verified** (source named, read 2026-11-17), **measured** (by us, on the stated machine), or **UNVERIFIED**. Quotes are short and verbatim from the cited page. Source list at the end of this section.
+
+**Short answers.** (1) `AAAA` to the user plus `A` to the relay works for dual-stack clients, with a failover cost of roughly one connection-attempt delay (about 0.2 to 0.3 s) in the clients we could check, and leaves IPv4-only clients on the relay. Two gaps need decisions: an IPv6-only client has no relay fallback, and browsers and phones are UNVERIFIED. (2) DNS has no "primary A": order is not significant, and clients differ from 0.2 s to 21 s when the first address is dead; the workable form is our server publishing the user's IPv4 only while a probe succeeds. (3) Direct mode only works for users who pass four checks in 10.3. (4) The security rules in 10.4 are the part that must not be skipped. (5) It must be opt-in (10.5). (6) Build AAAA-direct first (10.6).
+
+### 10.1 `AAAA` to the user, `A` to the relay
+
+- **What a dual-stack client does (verified).** RFC 8305 ("Happy Eyeballs v2"): the client sorts addresses by RFC 6724, interleaves families, starts the first attempt, and starts the next after a delay: "One recommended value for a default delay is 250 milliseconds." (min 100 ms, max 2 s); attempts are staggered, "one at a time", and unattempted addresses are ignored once one connection succeeds. So a dead or filtered user `AAAA` costs a dual-stack client about one delay before it connects to the relay `A`. A target that refuses or is unreachable at once costs less.
+- **IPv4-only clients (inference from the above).** They never ask for or use the `AAAA`; they get the relay. That is the fallback working as intended.
+- **IPv6-only clients: no fallback (inference, UNVERIFIED on real networks).** A client that can only use IPv6 gets the user's `AAAA` and nothing else from us (a DNS64 resolver on a NAT64 network would synthesise an address from the relay's `A`, but only when no `AAAA` exists). If the user's IPv6 is down, that client fails. Mitigation: publish the user's `AAAA` only while the probe in 10.4 succeeds, and otherwise publish the relay's `AAAA` (the relay boxes need IPv6 addresses for this).
+- **Per client class** (what the documentation says, and what we measured; we did **not** measure a browser, Go, a phone or Rust):
+
+| Client | Documented behaviour | Measured by us |
+|---|---|---|
+| curl / libcurl | Happy Eyeballs, `CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS` default 200 ms; "If there are only addresses for one stack, those are tried one after the other"; whole attempt capped by the connect timeout (default 300 s) | curl 8.21.0, Windows: dead first `A` (`192.0.2.1`) then a live `A`: **0.22 s** (3 runs, 0.215 to 0.226 s; control, live only: 0.014 s). Dead only: still trying at our 20 s cap |
+| Go `net.Dialer` | `FallbackDelay` default 300 ms for RFC 6555 fallback; "Dial will try each IP address in order until one succeeds" (from a model summary of the page; the middle of the page was not read in full) | not run |
+| Rust `std::net::TcpStream::connect` | "If `addr` yields multiple addresses, `connect` will be attempted with each of the addresses until a connection is successful." Sequential; no parallel attempt | not run (the OS connect timeout decides) |
+| Rust `hyper-util` `HttpConnector` (reqwest uses hyper) | `happy_eyeballs_timeout` default 300 ms; `None` disables parallel attempts | not run |
+| Python `socket.create_connection` | sequential per address | dead first `A` then live: **21.03 s** stall (Windows SYN timeout) |
+| Chrome, Firefox | the curl page says "Firefox and Chrome currently default to 300 ms" | not run |
+| Safari/Apple, Android, OkHttp | **UNVERIFIED** (RFC 8305's authors are at Apple, which is not evidence of what the frameworks do; the OkHttp page returned 404) | not run |
+
+  The host used for the measurements has **no working global IPv6** (a request to an IPv6-only site failed), so the dead `AAAA` attempt failed within about 15 ms (the connection went to the live `A` at once): that run shows only the fast-fail case, not a black-holed `AAAA`. A true black-holed `AAAA` test needs a host with IPv6 and a drop rule; it is **left unmeasured for now** (PM 2026-11-17: no host available) and written down in 10.7 for the VPS; do it before enabling direct mode for anyone.
+- **In-flight connections do not move (inference from TCP).** A connection already open to the user's address breaks if it goes down; the client reconnects and, after the DNS change, gets the relay.
+
+### 10.2 "Primary `A` / secondary `A`" and health-checked `A`
+
+- **DNS has no priority (verified).** RFC 1034 section 3.6: "The order of RRs in a set is not significant, and need not be preserved by name servers, resolvers, or other parts of the DNS." RFC 6724 says an application "would then typically try the first address in the list, looping over the list" and that DNS order is only the last tie-break after the destination-selection rules; RFC 1794 describes round-robin rotation and says "Clients, of course, may reorder this information". BIND's default is to return records "in cyclic order" (BIND ARM `rrset-order`). So a "primary" `A` is a hope, not a rule.
+- **What our own server does (measured).** hickory-server 0.26.3 returned the two `A` records of `multi.fixture.test` in the same order in 8 of 8 queries (no rotation); test `two_a_records_are_one_rrset_with_no_priority`. A resolver or client in between may still reorder.
+- **What a dead first address costs:** 0.2 s (curl, parallel after its timer) up to 21 s (Python, sequential, Windows) in the two clients we measured; a sequential client with a long OS connect timeout is the bad case. Two `A` records make failover client-dependent, so we do not use them.
+- **The alternative: one `A`, chosen by health.** Our authoritative server answers the user's IPv4 only while our probe of it succeeds, else the relay's, with a short TTL. Failover time is about (probe interval times failures needed) plus the TTL that resolvers keep, plus in-flight connections breaking.
+- **TTLs resolvers keep (verified, partly).** RFC 2181 section 8: "The TTL specifies a maximum time to live, not a mandatory time to live", and implementations "are always free to place an upper bound". Unbound: `cache-max-ttl` default 86400 s, `cache-min-ttl` default 0 (disabled). BIND: `max-cache-ttl` default 604800 s, `min-cache-ttl` default 0 and cannot exceed 90 s. So a well-behaved resolver does not hold a 30 s TTL longer than 30 s; a resolver that sets a floor can (at most 90 s in BIND). Google Public DNS, Cloudflare 1.1.1.1, ISP resolvers, browser and OS caches: **UNVERIFIED** (their pages say nothing about TTL clamping). RFC 8767 serve-stale lets a resolver answer from an expired entry (suggested 30 s TTL on stale answers, 1 to 3 days max stale) when the authoritative server is unreachable: it does not apply while we answer, but it means our own outage is masked for a while.
+- **Recommendation:** TTL 30 s on direct-mode names, probe every 10 s with three misses to withdraw, so expect about 1 minute to failover for well-behaved resolvers (a target to measure, not a promise). A shorter TTL multiplies query load on the two boxes; the usage log (section 8.2) will show it.
+
+### 10.3 What must be true on the user's side
+
+1. **Inbound must be allowed.** Residential IPv6 gateways are expected to block unsolicited inbound traffic: RFC 6092 section 2.3: "transport layer traffic is not forwarded into the interior network of a residential IPv6 gateway unless it has been solicited explicitly by interior transport endpoints". RFC 7084 does not state a default for IPv6 (UNVERIFIED beyond that). The user must open the port on their router (a firewall rule, or PCP where supported), so direct mode is not zero-setup.
+2. **IPv4 behind carrier-grade NAT cannot receive inbound.** RFC 6598: shared space is `100.64.0.0/10`, "not globally routable"; section 5.2: "some peer-to-peer applications cannot seed content due to the inability to open incoming ports through the CGN". A user whose router's WAN address is in `100.64.0.0/10` (or private) is relay-only for IPv4.
+3. **A stable address.** RFC 4941 temporary addresses are for "initiating outgoing sessions", with default preferred lifetime 1 day and valid lifetime 1 week, and may be preferred over public addresses for outbound; RFC 7217 gives a stable (per-network) interface identifier. A prefix delegated by the ISP can change (UNVERIFIED: no source read; ISP behaviour varies). So the agent must report a **stable** address and re-report on change; the record follows it (10.4).
+4. **A certificate valid on both paths.** On the relay path the edge either terminates with our wildcard (one label below the apex, section 3.1) or passes TLS through (deeper names, section 3.3). On the direct path the user's own software terminates TLS, so it needs its own certificate for the name (their wildcard by the ACME-DNS design, section 3.2, or a certificate for the single name, which also uses DNS-01 through `acme-api` because port 80 is closed, section 3.6; mind the section 3.5 rate limits). If both paths terminate with different certificates, both must be valid for the name; the simplest rule is **passthrough on the relay path too**, so one certificate serves both and the relay never sees the plaintext. That requires the stream tunnel (slice 7) for the fallback to carry anything but events.
+
+### 10.4 Security: a user-controlled `A`/`AAAA` is an attack surface
+
+The agent never sends us an address to publish. Rules, all enforced by the server:
+
+1. **Source-address rule.** Publish only the address our edge saw as the source of the agent's authenticated control connection (the existing bearer token). The agent must connect to us **from its stable address** (bind it explicitly): a default outbound connection uses a temporary address, which is not the address that will accept inbound (10.3 item 3). A report whose claimed address differs from the observed source is ignored.
+2. **Global unicast only.** Reject anything that is not globally reachable: IANA special-purpose registries list `Globally Reachable = False` for `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `127/8`, `169.254/16` (includes the cloud metadata address `169.254.169.254`), `::1/128`, `fe80::/10`, `fc00::/7` (AWS also uses `fd00:ec2::254`); also reject multicast, our own box addresses, and any address already published for **another user** (victim-pointing: a name that sends visitors to someone else's host, which is an availability and abuse-reputation harm, not an interception risk: a wrong host fails certificate validation for the name, section 3.6). The rules cover the DNS-rebinding family of attacks that Private Network Access describes (public names resolving to local addresses); browser defences exist (Chrome's preflight, July 2022 blog; current enforcement status UNVERIFIED) but we do not rely on them.
+3. **Prove inbound and ownership with a probe.** Before publishing, we open a **TLS connection** to the address and port with the name as SNI, **validate the certificate chain for the name**, and require a response only the agent can give over it (a nonce signed with its token); a plain connection is never probed. That proves the address is reachable, is the agent's, and is not the user's private address behind NAT; it is repeated every probe interval (10.2).
+4. **Authenticated and rate-limited updates.** One address per family per name, at most N changes per hour per service, every change in the audit log with the observed source.
+5. **Removal.** The record is withdrawn when probes fail (the name then answers the relay), when the service is disabled or suspended (NXDOMAIN, section 1.1), or when the user turns direct mode off.
+
+### 10.5 Privacy: recommendation for CireSnave (his decision)
+
+The design promises users' real IPs are not shown; direct mode publishes them in public DNS, where anyone can read them, and passive-DNS databases may keep history (UNVERIFIED: not looked up). **Recommendation: opt-in per user and per name, default relay-only,** with this consent sentence shown before it is switched on and recorded with a timestamp: *"Direct mode publishes this computer's internet address (IP address) in public DNS for <name>. Anyone can see it, learn roughly where you are and which provider you use, and send traffic straight to your computer; we remove it within about a minute of switching direct mode off or your agent going offline, but copies others have kept stay."* `NOTICE-AND-TERMS.md` section 3 gets a matching paragraph at the same cutover edit.
+
+### 10.6 Build order for direct mode
+
+Needs slice 2 (database-backed answers), slice 3 (relay), and slice 4 (TLS) first.
+
+1. **AAAA-direct (no failover logic).** `registry.db` gains a per-name direct address (family, address, consent timestamp, verified_at); the agent reports its stable address over the control connection; the edge applies 10.4 rules 1 to 3; the synthesiser answers the user's `AAAA` plus the relay `A` (and the relay `AAAA` while the probe fails). Tests: every rejected range, a mismatching claimed address, a failed probe, consent absent, removal on probe failure.
+2. **Measure before enabling for anyone:** run the protocol in 10.7 on the VPS, recording the results in this section in place of the UNVERIFIED cells.
+3. **Health-checked IPv4 (only if wanted):** same record table for `A`, plus the TTL and failover numbers from 10.2 measured against real resolvers.
+
+### 10.7 Measurement protocol, to run on the VPS when the edge goes there (not run yet)
+
+Nothing here has been run; the only dual-stack machines are CireSnave's rented VPSs and nothing runs on them without his say-so. Each cell marked "not run" in 10.1 is filled by this protocol.
+
+- **Setup.** A host with working global IPv6 and IPv4, a server `S` serving TLS on TCP 443 (a certificate valid for the test name) reachable on a **live IPv4** `A_live`, and a **dead IPv6** `AAAA_dead` that drops packets silently (a global address of the same host with `ip6tables -A INPUT -d <AAAA_dead> -j DROP`, so SYNs are black-holed and no ICMP unreachable returns; a second control uses `REJECT` to measure the fast-fail case). Use a name served by our edge (or `curl --resolve` / a hosts entry carrying both addresses) so the client sees one `AAAA` plus one `A`.
+- **Per client.** Run each client from a **separate** dual-stack host so the measuring client is not on the filtered machine: curl, Go (`net.Dialer`, `http.Client`), Rust (`std::net::TcpStream::connect`, `reqwest`), Python (`create_connection`), Chrome and Firefox (DevTools Network "Connecting" time), Safari/iOS and Android (a small test app or the browser), over mobile data and over Wi-Fi.
+- **Time.** From the call to the first byte of the HTTPS response, and separately the connect time; three runs per client per case, report all three, with a control run against `A_live` alone. Record client name and version and OS.
+- **Cases.** (a) dead `AAAA` (DROP) plus live `A`; (b) same with REJECT; (c) dead first `A` plus live second `A` (two-`A` case); (d) IPv6-only client (no IPv4 route): published `AAAA` only, then dead; (e) fail-back: after `AAAA_dead` is made live, how long until a new connection uses it; (f) a stale address that now answers as a **different TLS server** (a host with a certificate for another name): confirm each client reports a certificate error and does **not** go on to the second address (this is what 3.6 item 4 infers).
+- **Resolver TTL check (10.2).** Publish a 30 s TTL record, change it, and time how long each resolver (an ISP resolver, 1.1.1.1, 8.8.8.8, a browser, an OS cache) keeps serving the old answer; repeat three times.
+- **Pass line.** The recommendation in 10.1 holds if the dual-stack browsers, curl and Go reach the relay within about 1 s on case (a); clients that stall (as Python did) are listed by name in the user-facing notes.
+
+### Sources (read 2026-11-17)
+
+RFC 8305 (Dec 2017) sections 3, 4, 5, 8; RFC 6724 (Sep 2012) section 2, 6; RFC 1034 (Nov 1987) section 3.6; RFC 1794 (Apr 1995); RFC 2181 (Jul 1997) section 8; RFC 8767 (Mar 2020) sections 4, 5; RFC 6092 (Jan 2011) section 2.3; RFC 7084 (Nov 2013); RFC 6598 (Apr 2012) sections 5.2, 7; RFC 4941 (Sep 2007) sections 3, 5; RFC 7217 (Apr 2014); IANA IPv4 and IPv6 special-purpose address registries (last updated 2025-10-09); curl `CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS` and `CURLOPT_CONNECTTIMEOUT_MS` pages (curl.se/libcurl/c); Rust `TcpStream::connect` docs (std 1.100.0, 2026-11-09); `hyper-util` 0.1.21 `HttpConnector` docs (docs.rs, 2026-09-24); Go `net` docs (pkg.go.dev, go1.27.4, 2026-11-10); Unbound `unbound.conf(5)` and the BIND 9 ARM (readthedocs, "latest"); WICG Private Network Access draft (2024-09-26) and the Chrome PNA preflight blog (2022-07-07); AWS EC2 instance-metadata docs. Our measurements: curl 8.21.0 and Python on Windows 11, 2026-11-17, against a local HTTP server and `192.0.2.1` (TEST-NET-1) as the dead address; hickory-server 0.26.3 on the fixture zone.
 
 ## Open questions
 

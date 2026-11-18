@@ -47,5 +47,6 @@ One page, free, best effort:
    FERPA or COPPA duties and there is no data-protection agreement.
 5. You must be **13 or older**.
 6. You are responsible for what is sent to, and done by, the program you connect to the relay.
+7. **Secure connections only.** SurfaceAnt accepts only encrypted, authenticated connections (HTTPS/TLS with a certificate valid for the name). It does not serve plain HTTP, does not redirect from it, and will not be adapted to work with software or senders that cannot use TLS with certificate checking.
 
 -- lane: surfaceant

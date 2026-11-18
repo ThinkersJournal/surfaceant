@@ -1,0 +1,21 @@
+; FIXTURE, NOT THE REAL ZONE. Made-up data for the made-up name fixture.test, used only
+; to test surfaceant-edge. The real thinkersjournal.net export is a config input at cutover.
+$ORIGIN fixture.test.
+$TTL 300
+@       IN SOA  ns1.fixture.test. hostmaster.fixture.test. ( 2026111701 3600 600 1209600 300 )
+@       IN NS   ns1.fixture.test.
+@       IN NS   ns2.fixture.test.
+@       IN A    192.0.2.10
+@       IN AAAA 2001:db8::10
+@       IN CAA  0 issue "letsencrypt.org"
+ns1     IN A    192.0.2.1
+ns2     IN A    192.0.2.2
+www     IN A    192.0.2.20
+alice   IN A    192.0.2.30
+multi   IN A    192.0.2.41
+multi   IN A    192.0.2.42
+*       IN A    192.0.2.99
+big     IN TXT  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+big     IN TXT  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+big     IN TXT  "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+big     IN TXT  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"

@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.19
+
+- edge: new crate `surfaceant-edge`, slice 1 of `DESIGN-VPS-EDGE.md` section 9: `hickory-server` 0.26.3 serving one zone from a standard master file on UDP and TCP (`--origin`, `--zone-file`, `--bind`). Tested over real sockets against made-up FIXTURE zones (`fixture.test`, `nowild.test`; not the real export): apex SOA/NS/A/CAA, a named record beating the wildcard, NODATA, NXDOMAIN, TCP, truncation to TCP, `REFUSED` out of zone. **Finding:** hickory's file store matches the apex wildcard at any depth (not RFC 4592), pinned by a test; the real-export comparison and the diff against Cloudflare wait for the export. Not yet: RRL, EDNS 1232 cap, `ANY` handling, a CI job for the crate. docs: `DESIGN-VPS-EDGE.md` section 10 "Direct mode" (PM task): user `AAAA`/health-checked `A` with the relay as fallback, what clients do (curl and Python measured, others UNVERIFIED), user-side prerequisites, security rules for a user-controlled address, privacy opt-in recommendation, build order; fixture gains a two-`A` name and a test. docs: section 3.6 secure-protocols-only rule (CireSnave 2026-11-17): no plain-HTTP listener, port 80 closed and removed from the firewall list, no redirect, DNS-01 only; `NOTICE-AND-TERMS.md` term 7. client: **breaking (pre-0.1):** `ws://` is accepted only when the relay host resolves to loopback, otherwise the client stops with an error naming the rule; `wss://` unchanged (certificate validated); `Config::relay` doc updated; `check_ws_addrs` exported; tests in `tests/relay_scheme.rs`.
+
 ## 0.0.18
 
 - docs: `DESIGN-VPS-EDGE.md` interim-until-PSL (PM task, CireSnave 2026-11-17): section 8.1 interim isolation (events/named users only, `Set-Cookie` `Domain` strip rule and test, passthrough waits, surface-mode gate kept), section 3.5 certificates before the entry (rate-limit request, Google Trust Services fallback read from its own page, ZeroSSL/SSL.com unverified), section 8.2 day-one usage log.
