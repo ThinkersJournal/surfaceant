@@ -2,6 +2,8 @@
 //! standard master file (`docs/DESIGN-VPS-EDGE.md` section 9). Later slices replace the file
 //! with database-backed synthesis; the server wiring here stays.
 
+pub mod synth;
+
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use tokio::net::{TcpListener, UdpSocket};
