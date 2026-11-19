@@ -43,6 +43,8 @@ fn handler() -> EdgeHandler {
     EdgeHandler {
         synth: Arc::new(synth()),
         ttl: 300,
+        limiter: None,
+        started: std::time::Instant::now(),
         soa: SOA::new(
             n("ns1.fixture.test."),
             n("hostmaster.fixture.test."),
@@ -134,5 +136,106 @@ async fn synthesises_at_any_depth_and_denies_the_rest() {
         ResponseCode::NoError
     );
 
+    let _ = edge.server.shutdown_gracefully().await;
+}
+
+fn big_handler(limiter: Option<surfaceant_edge::rate::RateLimiter>) -> EdgeHandler {
+    let mut h = handler();
+    let mut s = synth();
+    let vals: Vec<String> = (0..12).map(|i| format!("{i:x}").repeat(200)).collect();
+    s.registry
+        .acme
+        .insert("_acme-challenge.alice.fixture.test".into(), vals);
+    h.synth = Arc::new(s);
+    h.limiter = limiter;
+    h
+}
+
+fn query_edns(name: &str, t: RecordType, payload: u16) -> Vec<u8> {
+    let mut m = Message::query();
+    m.metadata.id = 9;
+    m.metadata.recursion_desired = false;
+    m.add_query(Query::query(Name::from_ascii(name).unwrap(), t));
+    let mut e = hickory_proto::op::Edns::new();
+    e.set_max_payload(payload);
+    m.edns = Some(e);
+    m.to_vec().unwrap()
+}
+
+#[tokio::test]
+async fn udp_reply_is_capped_at_1232_and_truncated_even_if_the_client_offers_4096() {
+    let mut edge = bind_both(big_handler(None), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    s.send_to(
+        &query_edns("_acme-challenge.alice.fixture.test.", RecordType::TXT, 4096),
+        edge.udp,
+    )
+    .await
+    .unwrap();
+    let mut buf = vec![0u8; 8192];
+    let (n, _) = tokio::time::timeout(Duration::from_secs(5), s.recv_from(&mut buf))
+        .await
+        .expect("reply")
+        .unwrap();
+    assert!(n <= 1232, "UDP reply was {n} bytes");
+    let m = Message::from_vec(&buf[..n]).unwrap();
+    assert!(
+        m.metadata.truncation,
+        "TC set so the client retries over TCP"
+    );
+    assert_eq!(m.edns.as_ref().map(|e| e.max_payload()), Some(1232));
+
+    // The same query over TCP is whole.
+    let mut t = TcpStream::connect(edge.tcp).await.unwrap();
+    let q = query("_acme-challenge.alice.fixture.test.", RecordType::TXT);
+    t.write_all(&(q.len() as u16).to_be_bytes()).await.unwrap();
+    t.write_all(&q).await.unwrap();
+    let mut len = [0u8; 2];
+    t.read_exact(&mut len).await.unwrap();
+    let mut b = vec![0u8; u16::from_be_bytes(len) as usize];
+    t.read_exact(&mut b).await.unwrap();
+    let m = Message::from_vec(&b).unwrap();
+    assert!(!m.metadata.truncation);
+    assert_eq!(m.answers.len(), 12);
+    let _ = edge.server.shutdown_gracefully().await;
+}
+
+#[tokio::test]
+async fn over_limit_udp_gets_no_reply_but_tcp_is_not_limited() {
+    use surfaceant_edge::rate::{Limit, RateLimiter};
+    let lim = RateLimiter::new(
+        Limit {
+            burst: 2.0,
+            per_sec: 0.001,
+        },
+        100,
+    );
+    let mut edge = bind_both(big_handler(Some(lim)), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let m = udp(edge.udp, "alice.fixture.test.", RecordType::A).await;
+        assert_eq!(m.metadata.response_code, ResponseCode::NoError);
+    }
+    let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    s.send_to(&query("alice.fixture.test.", RecordType::A), edge.udp)
+        .await
+        .unwrap();
+    let mut buf = vec![0u8; 512];
+    let r = tokio::time::timeout(Duration::from_millis(400), s.recv_from(&mut buf)).await;
+    assert!(
+        r.is_err(),
+        "third UDP query from the same source must be silently dropped"
+    );
+
+    let mut t = TcpStream::connect(edge.tcp).await.unwrap();
+    let q = query("alice.fixture.test.", RecordType::A);
+    t.write_all(&(q.len() as u16).to_be_bytes()).await.unwrap();
+    t.write_all(&q).await.unwrap();
+    let mut len = [0u8; 2];
+    t.read_exact(&mut len).await.unwrap();
+    assert!(u16::from_be_bytes(len) > 0, "TCP still answers");
     let _ = edge.server.shutdown_gracefully().await;
 }

@@ -12,11 +12,15 @@ use hickory_proto::{
     },
 };
 use hickory_server::{
+    net::xfer::Protocol,
     server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
     zone_handler::MessageResponseBuilder,
 };
 
-use crate::synth::{Answer, Data, QType, Synth};
+use crate::{
+    rate::RateLimiter,
+    synth::{Answer, Data, QType, Synth},
+};
 
 /// Largest UDP payload we advertise and honour (DESIGN-VPS-EDGE 1.1: truncate to TCP).
 pub const MAX_UDP: u16 = 1232;
@@ -26,6 +30,10 @@ pub struct EdgeHandler {
     pub synth: Arc<Synth>,
     pub ttl: u32,
     pub soa: SOA,
+    /// Per-source limit for UDP (spoofable); over-limit queries get no reply at all.
+    pub limiter: Option<RateLimiter>,
+    /// Origin of the limiter's clock.
+    pub started: std::time::Instant,
 }
 
 fn qtype(t: RecordType) -> QType {
@@ -66,6 +74,18 @@ impl RequestHandler for EdgeHandler {
         request: &Request,
         mut response_handle: R,
     ) -> ResponseInfo {
+        if let Some(l) = &self.limiter
+            && request.protocol() == Protocol::Udp
+            && !l.allow(request.src().ip(), self.started.elapsed())
+        {
+            // Dropped, not refused: a refusal is a reply a spoofed source would receive.
+            let mut metadata = Metadata::response_from_request(&request.metadata);
+            metadata.response_code = ResponseCode::Refused;
+            return ResponseInfo::from(Header {
+                metadata,
+                counts: HeaderCounts::default(),
+            });
+        }
         let mut edns = None;
         if let Some(req) = request.edns.as_ref() {
             let mut e = Edns::new();
