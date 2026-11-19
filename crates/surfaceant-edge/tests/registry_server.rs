@@ -88,6 +88,10 @@ async fn reload_adds_suspends_and_survives_a_broken_database() {
     );
 
     // Break the file: every reload now fails; the last good registry keeps answering.
+    // Fold the WAL into the main file first: a reload racing the next lines then sees either
+    // the full data or garbage, never an older database that loads successfully.
+    c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
     drop(c);
     for ext in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(dir.join(format!("registry.db{ext}")));
