@@ -11,4 +11,5 @@ publish.workspace = true
 [dependencies]
 hickory-proto = "0.26.3"
 hickory-server = "0.26.3"
+async-trait = "0.1"
 tokio = { version = "1.54.1", features = ["full"] }
