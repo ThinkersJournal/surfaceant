@@ -239,3 +239,27 @@ async fn over_limit_udp_gets_no_reply_but_tcp_is_not_limited() {
     assert!(u16::from_be_bytes(len) > 0, "TCP still answers");
     let _ = edge.server.shutdown_gracefully().await;
 }
+
+/// TCP idle cap: a connection that never sends a query is closed by the server within about
+/// `TCP_IDLE`, so slow-loris connections cannot pile up toward the connection cap.
+#[tokio::test]
+async fn idle_tcp_connection_is_closed() {
+    let mut edge = bind_both(handler(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let mut s = TcpStream::connect(edge.tcp).await.unwrap();
+    let mut b = [0u8; 1];
+    let started = std::time::Instant::now();
+    let r = tokio::time::timeout(
+        surfaceant_edge::TCP_IDLE + Duration::from_secs(5),
+        s.read(&mut b),
+    )
+    .await
+    .expect("server closed the idle connection in time");
+    assert!(matches!(r, Ok(0) | Err(_)), "EOF or reset, got {r:?}");
+    assert!(
+        started.elapsed() >= surfaceant_edge::TCP_IDLE - Duration::from_secs(1),
+        "closed no sooner than the idle limit"
+    );
+    let _ = edge.server.shutdown_gracefully().await;
+}

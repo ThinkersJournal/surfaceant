@@ -22,6 +22,9 @@ use hickory_server::{
 /// Idle time after which a TCP connection that sent nothing is closed.
 pub const TCP_IDLE: Duration = Duration::from_secs(5);
 
+/// Most concurrent TCP connections hickory accepts; beyond it new connections wait.
+pub const TCP_MAX_CONNECTIONS: usize = 4096;
+
 /// A running server and the addresses it actually bound (port 0 resolves here).
 pub struct Edge<H: hickory_server::server::RequestHandler = Catalog> {
     pub server: Server<H>,
@@ -71,7 +74,7 @@ pub async fn bind_both<H: hickory_server::server::RequestHandler>(
             Ok(tcp) => {
                 let tcp_addr = tcp.local_addr().map_err(|e| e.to_string())?;
                 server.register_socket(udp);
-                server.register_listener(tcp, TCP_IDLE, 4096);
+                server.register_listener(tcp, TCP_IDLE, TCP_MAX_CONNECTIONS);
                 return Ok(Edge {
                     server,
                     udp: udp_addr,
