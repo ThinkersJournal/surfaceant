@@ -2,7 +2,7 @@
 name = "surfaceant"
 version = "0.0.20"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Planned. The crate name is reserved; there is no API yet."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ThinkersJournal/surfaceant"
@@ -15,7 +15,7 @@ members = ["crates/surfaceant-proto", "crates/surfaceant-client", "crates/surfac
 [workspace.package]
 version = "0.0.20"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ThinkersJournal/surfaceant"
 publish = false

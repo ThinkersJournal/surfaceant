@@ -3,6 +3,7 @@
 //! with database-backed synthesis; the server wiring here stays.
 
 pub mod handler;
+pub mod registry;
 pub mod synth;
 
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
