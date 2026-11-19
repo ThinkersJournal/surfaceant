@@ -3,7 +3,7 @@
 //! only when `alice` is NOT a user; for a registered user every depth resolves, and an
 //! unregistered or suspended owner never inherits a wildcard (RFC 4592 / Cloudflare).
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
@@ -41,7 +41,7 @@ fn synth() -> Synth {
 fn handler() -> EdgeHandler {
     let n = |s: &str| Name::from_ascii(s).unwrap();
     EdgeHandler {
-        synth: Arc::new(synth()),
+        synth: surfaceant_edge::handler::cell(synth()),
         ttl: 300,
         limiter: None,
         started: std::time::Instant::now(),
@@ -146,7 +146,7 @@ fn big_handler(limiter: Option<surfaceant_edge::rate::RateLimiter>) -> EdgeHandl
     s.registry
         .acme
         .insert("_acme-challenge.alice.fixture.test".into(), vals);
-    h.synth = Arc::new(s);
+    h.synth = surfaceant_edge::handler::cell(s);
     h.limiter = limiter;
     h
 }

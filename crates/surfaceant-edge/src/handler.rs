@@ -2,7 +2,10 @@
 //! The synthesis decisions live in `synth.rs`; this file only maps them onto DNS records and
 //! response codes, sets AA, and caps the EDNS payload at 1232 bytes.
 
-use std::{str::FromStr, sync::Arc};
+use std::{
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
 use hickory_proto::{
     op::{Edns, Header, HeaderCounts, MessageType, Metadata, OpCode, ResponseCode},
@@ -25,9 +28,18 @@ use crate::{
 /// Largest UDP payload we advertise and honour (DESIGN-VPS-EDGE 1.1: truncate to TCP).
 pub const MAX_UDP: u16 = 1232;
 
+/// The live synthesis, swapped whole on a registry reload; a query takes one `Arc` and
+/// answers from that snapshot, so a reload never changes an answer half way.
+pub type SynthCell = Arc<RwLock<Arc<Synth>>>;
+
+/// Make a [`SynthCell`].
+pub fn cell(s: Synth) -> SynthCell {
+    Arc::new(RwLock::new(Arc::new(s)))
+}
+
 /// Answers one zone from a [`Synth`].
 pub struct EdgeHandler {
-    pub synth: Arc<Synth>,
+    pub synth: SynthCell,
     pub ttl: u32,
     pub soa: SOA,
     /// Per-source limit for UDP (spoofable); over-limit queries get no reply at all.
@@ -112,15 +124,19 @@ impl RequestHandler for EdgeHandler {
         let qname = q.name().to_string();
         let owner: Name = q.name().into();
 
+        let snapshot: Arc<Synth> = match self.synth.read() {
+            Ok(g) => g.clone(),
+            Err(p) => p.into_inner().clone(),
+        };
         let mut meta = Metadata::response_from_request(&request.metadata);
         meta.authoritative = true;
         meta.recursion_available = false;
 
         let soa_rec = self.record(
-            &Name::from_ascii(format!("{}.", self.synth.apex)).unwrap(),
+            &Name::from_ascii(format!("{}.", snapshot.apex)).unwrap(),
             &Data::Soa,
         );
-        match self.synth.answer(&qname, qtype(q.query_type())) {
+        match snapshot.answer(&qname, qtype(q.query_type())) {
             Answer::Refused => {
                 meta.authoritative = false;
                 meta.response_code = ResponseCode::Refused;
