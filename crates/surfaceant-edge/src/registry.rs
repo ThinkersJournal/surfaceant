@@ -1,5 +1,5 @@
 //! Slice 2: `registry.db`, the durable store (`docs/DESIGN-VPS-EDGE.md` section 1.2), as a
-//! SQLite file. It fills [`synth::Registry`]; the DNS path reads that in-memory copy, never
+//! SQLite file. It fills [`crate::synth::Registry`]; the DNS path reads that in-memory copy, never
 //! the file, so a query never waits on disk. The disposable `buffer.db` is a different file
 //! and is never mentioned here.
 
