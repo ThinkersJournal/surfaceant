@@ -3,7 +3,7 @@
 //! Read-only: the zone file is read from the given path (never copied into the repo) and the
 //! upstream is asked ordinary public DNS queries.
 //!
-//!   cargo run -p surfaceant-edge --example zone_diff -- <origin> <zone-file> <upstream-ip:53>
+//!   cargo run -p surfaceant-edge --example zone_diff -- <origin> <zone-file> <upstream-ip:53> [--assume-absolute-owners]
 //!
 //! Proxied (Cloudflare) records are answered with Cloudflare's own anycast addresses, so an
 //! address in an `A`/`AAAA` answer is reduced to its type and count; everything else
@@ -67,22 +67,41 @@ fn shape(m: &Message) -> String {
 #[tokio::main]
 async fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    if a.len() != 3 {
-        eprintln!("usage: zone_diff <origin> <zone-file> <upstream-ip:53>");
+    if a.len() < 3 {
+        eprintln!(
+            "usage: zone_diff <origin> <zone-file> <upstream-ip:53> [--assume-absolute-owners]"
+        );
         std::process::exit(2);
     }
     let origin = a[0].trim_end_matches('.').to_string();
     let upstream: SocketAddr = a[2].parse().expect("upstream ip:port");
-    // Cloudflare's export writes the SOA owner without a trailing dot, which a master-file
-    // parser reads as relative (`thinkersjournal.net.thinkersjournal.net.`). Fix owners into a
-    // temp copy; the original is untouched.
+    // Cloudflare's export writes the SOA owner without a trailing dot and has no `$ORIGIN`.
+    // In master-file syntax that owner is RELATIVE to the origin, i.e.
+    // `thinkersjournal.net.thinkersjournal.net.`, and the parser refuses the zone. We do not
+    // guess: without `--assume-absolute-owners` the tool stops and says so. With it, owners
+    // lacking a trailing dot are made absolute in a temp copy (the file itself is untouched);
+    // that is a statement about this export, which the PM's note says is a Cloudflare DNS
+    // export (its header says it MUST be edited before use).
+    let assume = a.iter().any(|x| x == "--assume-absolute-owners");
     let text = std::fs::read_to_string(&a[1]).expect("read zone file");
+    let has_origin = text.lines().any(|l| l.trim_start().starts_with("$ORIGIN"));
+    let relative = |l: &str| {
+        let owner = l.split_whitespace().next().unwrap_or("");
+        l.starts_with(|c: char| c.is_alphanumeric() || c == '*') && !owner.ends_with('.')
+    };
+    let n_relative = text.lines().filter(|l| relative(l)).count();
+    if n_relative > 0 && !has_origin && !assume {
+        eprintln!(
+            "refusing: {n_relative} owner name(s) have no trailing dot and the file has no $ORIGIN,              so they are relative to {origin}. and would not match the zone. If the owners are              meant to be absolute (a Cloudflare export), pass --assume-absolute-owners."
+        );
+        std::process::exit(1);
+    }
     let mut fixed = 0;
     let norm: Vec<String> = text
         .lines()
         .map(|l| {
-            let owner = l.split_whitespace().next().unwrap_or("");
-            if l.starts_with(|c: char| c.is_alphanumeric() || c == '*') && !owner.ends_with('.') {
+            if assume && relative(l) {
+                let owner = l.split_whitespace().next().unwrap_or("");
                 fixed += 1;
                 format!("{}.{}", owner, &l[owner.len()..])
             } else {

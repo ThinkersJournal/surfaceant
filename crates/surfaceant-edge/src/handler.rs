@@ -11,7 +11,7 @@ use hickory_proto::{
     op::{Edns, Header, HeaderCounts, MessageType, Metadata, OpCode, ResponseCode},
     rr::{
         Name, RData, Record, RecordType,
-        rdata::{A, AAAA, CAA, NS, SOA, TXT},
+        rdata::{A, AAAA, CAA, HINFO, NS, SOA, TXT},
     },
 };
 use hickory_server::{
@@ -69,6 +69,7 @@ impl EdgeHandler {
             Data::Ns(n) => RData::NS(NS(Name::from_ascii(format!("{n}.")).ok()?)),
             Data::Soa => RData::SOA(self.soa.clone()),
             Data::Txt(t) => RData::TXT(TXT::new(vec![t.clone()])),
+            Data::Hinfo => RData::HINFO(HINFO::new("RFC8482".into(), String::new())),
             Data::Caa(issuer) => RData::CAA(CAA::new_issue(
                 false,
                 Some(Name::from_str(issuer).ok()?),

@@ -263,3 +263,102 @@ async fn idle_tcp_connection_is_closed() {
     );
     let _ = edge.server.shutdown_gracefully().await;
 }
+
+// Named cases taken from the real-export diff against Cloudflare (2026-11-20, DESIGN s9).
+// Reference: RFC 4592 and RFC 8482, not Cloudflare itself; Cloudflare agrees with both.
+
+async fn ask(edge: &surfaceant_edge::Edge<EdgeHandler>, name: &str, t: RecordType) -> Message {
+    udp(edge.udp, name, t).await
+}
+
+/// RFC 4592 section 3.3.1: below an existing name the wildcard does not apply, so
+/// `x.www` and `a.b.www` are NXDOMAIN. (hickory's file store answers an `A` there; the diff
+/// showed Cloudflare answering NXDOMAIN.)
+#[tokio::test]
+async fn below_an_existing_name_is_nxdomain_not_the_wildcard() {
+    let mut edge = bind_both(handler(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    for n in ["x.www.fixture.test.", "a.b.www.fixture.test."] {
+        let m = ask(&edge, n, RecordType::A).await;
+        assert_eq!(m.metadata.response_code, ResponseCode::NXDomain, "{n}");
+        assert!(m.answers.is_empty(), "{n}");
+    }
+    // control: www itself answers, so the NXDOMAIN above is about depth, not the name
+    let m = ask(&edge, "www.fixture.test.", RecordType::A).await;
+    assert_eq!(m.answers.len(), 1);
+    let _ = edge.server.shutdown_gracefully().await;
+}
+
+/// At a name that exists, a type it has no records of is NODATA (NOERROR, SOA in authority),
+/// never NXDOMAIN. (The diff: file store NXDOMAIN, Cloudflare NODATA, for `AAAA`, `NS`,
+/// `SOA`, `TXT`, `MX`, `CAA` at wildcard-matched names.)
+#[tokio::test]
+async fn missing_type_at_an_existing_name_is_nodata() {
+    let mut edge = bind_both(handler(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    for n in [
+        "alice.fixture.test.",
+        "x.alice.fixture.test.",
+        "a.b.c.alice.fixture.test.",
+    ] {
+        for t in [
+            RecordType::NS,
+            RecordType::SOA,
+            RecordType::TXT,
+            RecordType::MX,
+            RecordType::CAA,
+        ] {
+            let m = ask(&edge, n, t).await;
+            assert_eq!(m.metadata.response_code, ResponseCode::NoError, "{n} {t}");
+            assert!(m.answers.is_empty() && !m.authorities.is_empty(), "{n} {t}");
+        }
+    }
+    let _ = edge.server.shutdown_gracefully().await;
+}
+
+/// Control: Cloudflare-only behaviour is NOT copied. Cloudflare gives a proxied name its own
+/// `AAAA`; we answer `AAAA` only from the edge addresses we are configured with. The fixture
+/// has no IPv6 edge address, so `AAAA` is NODATA, not an invented address.
+#[tokio::test]
+async fn no_invented_aaaa_for_names_without_an_ipv6_edge() {
+    let mut edge = bind_both(handler(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    for n in [
+        "alice.fixture.test.",
+        "x.alice.fixture.test.",
+        "fixture.test.",
+    ] {
+        let m = ask(&edge, n, RecordType::AAAA).await;
+        assert_eq!(m.metadata.response_code, ResponseCode::NoError, "{n}");
+        assert!(m.answers.is_empty(), "{n}: no AAAA we do not have");
+    }
+    let _ = edge.server.shutdown_gracefully().await;
+}
+
+/// RFC 8482 section 4.2: `ANY` gets one `HINFO "RFC8482" ""`, at the apex and on a user name;
+/// an unknown name is still NXDOMAIN.
+#[tokio::test]
+async fn any_is_a_single_hinfo_per_rfc8482() {
+    let mut edge = bind_both(handler(), "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    for n in [
+        "fixture.test.",
+        "alice.fixture.test.",
+        "x.alice.fixture.test.",
+    ] {
+        let m = ask(&edge, n, RecordType::ANY).await;
+        assert_eq!(m.answers.len(), 1, "{n}");
+        assert!(
+            matches!(&m.answers[0].data, RData::HINFO(h) if h.cpu.as_ref() == b"RFC8482" && h.os.is_empty()),
+            "{n}: {:?}",
+            m.answers[0].data
+        );
+    }
+    let m = ask(&edge, "nobody.fixture.test.", RecordType::ANY).await;
+    assert_eq!(m.metadata.response_code, ResponseCode::NXDomain);
+    let _ = edge.server.shutdown_gracefully().await;
+}
