@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.21
+
+- edge: slice 2 continued (`DESIGN-VPS-EDGE.md` section 9, item 2). New `registry.rs` (SQLite `registry.db` via rusqlite 0.43 bundled, plus the daily `usage_log` table and `record_usage`; MSRV raised to 1.89 to take it), `rate.rs` (per-source UDP token bucket: over-limit queries are dropped, not refused; IPv6 keyed by /64; TCP is not limited), `service.rs` and `main.rs --registry` (answers from a hot-swapped `Synth`, reloaded every N seconds, the last good copy kept if a reload fails; bind retry for Windows excluded ports). Tests: registry (3), rate (3), real-socket tests for the 1232-byte UDP cap with truncation, rate limiting and an idle TCP connection closed after `TCP_IDLE` (5 s); `TCP_MAX_CONNECTIONS` (4096) is now a named constant. Still not done: snapshot to box B, the real-export comparison and the Cloudflare diff (wait for the export), nothing of slices 1 and 2 is deployed.
+
 ## 0.0.20
 
 - edge: slice 2 (part), per-query answer synthesis instead of a zone file (`DESIGN-VPS-EDGE.md` sections 1.1 and 9). `synth.rs` is a pure decision function over registry data (registered users at any depth, reserved names, suspended and unknown names NXDOMAIN, `_acme-challenge` TXT from a live table, minimal `ANY`, `REFUSED` out of zone); `handler.rs` is a hickory `RequestHandler` that answers from it (AA, SOA in authority, EDNS payload advertised at most 1232); `bind_both` serves any handler on UDP and TCP. Tested with 8 unit tests and a real-socket test over the made-up FIXTURE zone `fixture.test`; this removes the wildcard-at-any-depth difference from the file store for synthesised names. Not yet: the SQLite `registry.db`, RRL and TCP caps, a test of a reply over 1232 bytes, snapshot to box B, the usage-log table, `main.rs` wiring; the real-export comparison and Cloudflare diff still wait for the export. CHANGELOG 0.0.19: the breaking client `ws://` change is now the first line (PM request on #18).
