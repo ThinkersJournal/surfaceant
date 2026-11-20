@@ -6,6 +6,7 @@ pub mod handler;
 pub mod rate;
 pub mod registry;
 pub mod service;
+pub mod snapshot;
 pub mod synth;
 
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
