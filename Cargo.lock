@@ -1423,11 +1423,11 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surfaceant"
-version = "0.0.21"
+version = "0.0.22"
 
 [[package]]
 name = "surfaceant-client"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "futures-util",
  "hmac",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "surfaceant-edge"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "async-trait",
  "ed25519-dalek",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "surfaceant-proto"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "base64",
  "serde",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "surfaceant-worker"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",

@@ -37,6 +37,34 @@ pub struct RegistryConfig {
     /// Per-source UDP limit; `None` = unlimited (tests only).
     pub limit: Option<Limit>,
     pub reload: Duration,
+    /// Box B: where the carrier drops signed snapshots, and the key they must verify under.
+    pub snapshot: Option<SnapshotIngest>,
+}
+
+/// Where B finds a snapshot file and which public key vouches for it.
+#[derive(Clone, Debug)]
+pub struct SnapshotIngest {
+    /// A file the carrier (WireGuard transport, a later slice) writes; consumed on success or refusal.
+    pub inbox: PathBuf,
+    pub key: ed25519_dalek::VerifyingKey,
+}
+
+/// Install a snapshot from the inbox into `cfg.db` if one is waiting. Returns the new last
+/// sequence. A refused snapshot is logged and removed so it is not retried every tick; the
+/// registry in place keeps serving.
+pub fn ingest(cfg: &RegistryConfig, last: Option<u64>) -> Option<u64> {
+    let ing = cfg.snapshot.as_ref()?;
+    let bytes = std::fs::read(&ing.inbox).ok()?;
+    let tmp = cfg.db.with_extension("incoming");
+    let r = crate::snapshot::verify_and_install(&bytes, &ing.key, last, &tmp, &cfg.db);
+    let _ = std::fs::remove_file(&ing.inbox);
+    match r {
+        Ok(seq) => Some(seq),
+        Err(e) => {
+            eprintln!("surfaceant-edge: snapshot refused, keeping current registry: {e:?}");
+            last
+        }
+    }
 }
 
 fn now_unix() -> i64 {
@@ -98,16 +126,26 @@ pub async fn serve_registry(cfg: RegistryConfig) -> Result<Running, String> {
     };
     let edge = bind_both(handler, cfg.bind).await?;
     let reloader = tokio::spawn(async move {
+        let mut last_seq: Option<u64> = None;
         let mut tick = tokio::time::interval(cfg.reload);
         tick.tick().await; // the first tick is immediate; we just loaded
         loop {
             tick.tick().await;
             let (c, a) = (cfg.clone(), apex.clone());
-            match tokio::task::spawn_blocking(move || build(&c, &a)).await {
-                Ok(Ok(s)) => match cell.write() {
-                    Ok(mut g) => *g = Arc::new(s),
-                    Err(p) => *p.into_inner() = Arc::new(s),
-                },
+            let ls = last_seq;
+            match tokio::task::spawn_blocking(move || {
+                let seq = ingest(&c, ls);
+                build(&c, &a).map(|s| (s, seq))
+            })
+            .await
+            {
+                Ok(Ok((s, seq))) => {
+                    last_seq = seq;
+                    match cell.write() {
+                        Ok(mut g) => *g = Arc::new(s),
+                        Err(p) => *p.into_inner() = Arc::new(s),
+                    }
+                }
                 Ok(Err(e)) => {
                     eprintln!("surfaceant-edge: reload failed, keeping last registry: {e}")
                 }
@@ -116,4 +154,55 @@ pub async fn serve_registry(cfg: RegistryConfig) -> Result<Running, String> {
         }
     });
     Ok(Running { edge, reloader })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+
+    #[test]
+    fn ingest_installs_once_then_refuses_replay_and_a_wrong_key_and_always_consumes_the_inbox() {
+        let d = std::env::temp_dir().join(format!("sa-ingest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let k = SigningKey::from_bytes(&[3; 32]);
+        let src = registry::open(&d.join("a.db")).unwrap();
+        src.execute("INSERT INTO names VALUES ('bob', 1, 0)", [])
+            .unwrap();
+        let snap = crate::snapshot::make(&src, &d.join("s.tmp"), 7, 1, &k).unwrap();
+        let mut cfg = RegistryConfig {
+            origin: "fixture.test.".into(),
+            db: d.join("b.db"),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            edge_a: vec![],
+            edge_aaaa: vec![],
+            ns: vec![],
+            caa: vec![],
+            ttl: 300,
+            limit: None,
+            reload: Duration::from_secs(1),
+            snapshot: Some(SnapshotIngest {
+                inbox: d.join("in.snap"),
+                key: k.verifying_key(),
+            }),
+        };
+        assert_eq!(ingest(&cfg, None), None, "empty inbox: nothing happens");
+        std::fs::write(d.join("in.snap"), &snap).unwrap();
+        assert_eq!(ingest(&cfg, None), Some(7));
+        assert!(!d.join("in.snap").exists());
+        assert!(
+            registry::load(&registry::open(&d.join("b.db")).unwrap(), 0)
+                .unwrap()
+                .users
+                .contains("bob")
+        );
+        std::fs::write(d.join("in.snap"), &snap).unwrap();
+        assert_eq!(ingest(&cfg, Some(7)), Some(7), "replay refused, last kept");
+        assert!(!d.join("in.snap").exists());
+        cfg.snapshot.as_mut().unwrap().key = SigningKey::from_bytes(&[4; 32]).verifying_key();
+        std::fs::write(d.join("in.snap"), &snap).unwrap();
+        assert_eq!(ingest(&cfg, Some(1)), Some(1), "wrong key refused");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
