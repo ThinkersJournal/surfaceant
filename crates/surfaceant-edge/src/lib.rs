@@ -2,6 +2,7 @@
 //! standard master file (`docs/DESIGN-VPS-EDGE.md` section 9). Later slices replace the file
 //! with database-backed synthesis; the server wiring here stays.
 
+pub mod carrier;
 pub mod handler;
 pub mod rate;
 pub mod registry;
