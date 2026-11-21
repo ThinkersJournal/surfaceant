@@ -14,3 +14,4 @@ hickory-server = "0.26.3"
 async-trait = "0.1"
 tokio = { version = "1.54.1", features = ["full"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
+ed25519-dalek = "3.0.0"

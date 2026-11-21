@@ -2,7 +2,7 @@
 //!
 //! A pure decision function over registry data, with no sockets and no hickory types, so the
 //! rules (any depth, reserved names, suspension, `_acme-challenge`, RFC 4592 empty
-//! non-terminals, minimal `ANY`) are unit-tested directly. The registry here is in memory;
+//! non-terminals, `ANY` as RFC 8482 `HINFO`) are unit-tested directly. The registry here is in memory;
 //! `registry.db` will fill the same struct.
 
 use std::{
@@ -32,6 +32,8 @@ pub enum Data {
     Soa,
     Txt(String),
     Caa(String),
+    /// RFC 8482 section 4.2 answer to `ANY`: `HINFO "RFC8482" ""`.
+    Hinfo,
 }
 
 /// What to send back.
@@ -97,9 +99,14 @@ fn of_type(all: &[Data], t: QType) -> Vec<Data> {
 }
 
 fn pick(all: Vec<Data>, t: QType) -> Answer {
-    // `ANY` is answered minimally: one cheap record, never a bulk answer (amplification).
+    // `ANY` is answered as RFC 8482 section 4.2 says: one synthesised `HINFO`, never the
+    // real records (no bulk answer, so no amplification). The name still has to exist.
     let r = if t == QType::Any {
-        all.into_iter().take(1).collect()
+        if all.is_empty() {
+            vec![]
+        } else {
+            vec![Data::Hinfo]
+        }
     } else {
         of_type(&all, t)
     };
@@ -138,7 +145,7 @@ impl Synth {
             all.extend(self.edge_records());
             all.extend(self.caa.iter().cloned().map(Data::Caa));
             return if qtype == QType::Any {
-                Answer::Records(vec![Data::Soa])
+                Answer::Records(vec![Data::Hinfo])
             } else {
                 pick(all, qtype)
             };
@@ -278,15 +285,17 @@ mod tests {
             s.answer("zone.test", QType::Ns),
             Answer::Records(vec![Data::Ns("ns1.zone.test".into())])
         );
+        // RFC 8482 section 4.2: ANY gets one HINFO, at the apex and on a user name alike;
+        // a name that does not exist is still NXDOMAIN.
         assert_eq!(
             s.answer("zone.test", QType::Any),
-            Answer::Records(vec![Data::Soa])
+            Answer::Records(vec![Data::Hinfo])
         );
-        // Never more than one record for ANY on a user name.
-        match s.answer("alice.zone.test", QType::Any) {
-            Answer::Records(r) => assert_eq!(r.len(), 1),
-            o => panic!("{o:?}"),
-        }
+        assert_eq!(
+            s.answer("alice.zone.test", QType::Any),
+            Answer::Records(vec![Data::Hinfo])
+        );
+        assert_eq!(s.answer("nobody.zone.test", QType::Any), Answer::NxDomain);
     }
 
     #[test]

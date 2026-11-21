@@ -12,7 +12,7 @@ use std::{net::SocketAddr, path::PathBuf, process::ExitCode, time::Duration};
 
 use surfaceant_edge::{
     rate::Limit,
-    service::{RegistryConfig, serve_registry},
+    service::{RegistryConfig, SnapshotIngest, serve_registry},
 };
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -40,7 +40,22 @@ fn num<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> Result<
     }
 }
 
-const USAGE: &str = "usage: surfaceant-edge --origin <zone.> (--zone-file <path> | --registry <db> --edge-a <ip,..> [--edge-aaaa <ip,..>] [--ns <host,..>] [--caa <issuer,..>] [--rate <q/s>] [--burst <n>] [--reload-secs <n>]) [--bind <addr:port>]";
+fn parse_pubkey(hex: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let b: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            hex.get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        })
+        .collect::<Option<_>>()
+        .ok_or("--snapshot-pubkey must be hex")?;
+    let arr: [u8; 32] = b
+        .try_into()
+        .map_err(|_| "--snapshot-pubkey must be 32 bytes (64 hex)")?;
+    ed25519_dalek::VerifyingKey::from_bytes(&arr).map_err(|e| format!("bad --snapshot-pubkey: {e}"))
+}
+
+const USAGE: &str = "usage: surfaceant-edge --origin <zone.> (--zone-file <path> | --registry <db> --edge-a <ip,..> [--edge-aaaa <ip,..>] [--ns <host,..>] [--caa <issuer,..>] [--rate <q/s>] [--burst <n>] [--reload-secs <n>] [--snapshot-inbox <file> --snapshot-pubkey <hex>]) [--bind <addr:port>]";
 
 fn registry_config(args: &[String], origin: &str, db: String) -> Result<RegistryConfig, String> {
     let edge_a = list(args, "--edge-a")?;
@@ -70,6 +85,17 @@ fn registry_config(args: &[String], origin: &str, db: String) -> Result<Registry
             per_sec: rate,
         }),
         reload: Duration::from_secs(num(args, "--reload-secs", 5)?),
+        snapshot: match (
+            arg(args, "--snapshot-inbox"),
+            arg(args, "--snapshot-pubkey"),
+        ) {
+            (None, None) => None,
+            (Some(inbox), Some(hex)) => Some(SnapshotIngest {
+                inbox: PathBuf::from(inbox),
+                key: parse_pubkey(&hex)?,
+            }),
+            _ => return Err("--snapshot-inbox and --snapshot-pubkey go together".into()),
+        },
     })
 }
 

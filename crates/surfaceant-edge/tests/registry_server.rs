@@ -60,6 +60,7 @@ async fn reload_adds_suspends_and_survives_a_broken_database() {
         ttl: 300,
         limit: None,
         reload: Duration::from_millis(150),
+        snapshot: None,
     };
     let mut run = serve_registry(cfg).await.unwrap();
     let a = run.edge.udp;

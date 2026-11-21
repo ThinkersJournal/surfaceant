@@ -2,6 +2,11 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.22
+
+- edge: slice 2, snapshot to box B (`DESIGN-VPS-EDGE.md` sections 1.1 and 9). New `snapshot.rs`: ed25519-signed registry snapshot (`VACUUM INTO` copy, `SASNAP1` format, sequence number against rollback, SQLite integrity check, atomic rename install; B holds only the public key); 3 tests. `service.rs` `ingest` and `main.rs --snapshot-inbox <file> --snapshot-pubkey <hex>`: each reload tick installs a waiting snapshot into `registry.db` before reloading, consumes the inbox file whether accepted or refused, and keeps the registry in place on a refusal (1 test: install, replay, wrong key). The carrier that writes the inbox (HTTP over WireGuard, A serves and B polls) is NOT built. Also: `ANY` answered as RFC 8482 `HINFO`, four named tests from the real-export diff, `examples/zone_diff.rs` (refuses relative owners unless `--assume-absolute-owners`) with the real-export results in `DESIGN-VPS-EDGE.md` section 9 (export read from a path, not in the repo). Nothing of the edge is deployed.
+- licence: `LICENSE-APACHE` replaced with the canonical Apache-2.0 text (sha256 cfc7749b..., equal to apache.org and PersistAnt's copy); licence text only, no scope change (pm-ants apache-text-fix).
+
 ## 0.0.21
 
 - edge: slice 2 continued (`DESIGN-VPS-EDGE.md` section 9, item 2). New `registry.rs` (SQLite `registry.db` via rusqlite 0.43 bundled, plus the daily `usage_log` table and `record_usage`; MSRV raised to 1.89 to take it), `rate.rs` (per-source UDP token bucket: over-limit queries are dropped, not refused; IPv6 keyed by /64; TCP is not limited), `service.rs` and `main.rs --registry` (answers from a hot-swapped `Synth`, reloaded every N seconds, the last good copy kept if a reload fails; bind retry for Windows excluded ports). Tests: registry (3), rate (3), real-socket tests for the 1232-byte UDP cap with truncation, rate limiting and an idle TCP connection closed after `TCP_IDLE` (5 s); `TCP_MAX_CONNECTIONS` (4096) is now a named constant. Still not done: snapshot to box B, the real-export comparison and the Cloudflare diff (wait for the export), nothing of slices 1 and 2 is deployed.
