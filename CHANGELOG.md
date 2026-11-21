@@ -2,6 +2,10 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.0.23
+
+- edge: the snapshot carrier (`carrier.rs`, `DESIGN-VPS-EDGE.md` section 9). Framed TCP, not HTTP: the ed25519 signature is the trust and WireGuard is only access control. A serves the current snapshot file (`--snapshot-serve <addr:port> --snapshot-file <path>`, 8 connections max, 10 s per step); B pulls each reload tick (`--snapshot-pull <addr:port>`, 30 s timeout, sends its last sequence, gets bytes only if newer, size-capped) into the existing inbox, where `ingest` verifies and installs. A client that is not ours gets the connection closed with no reply. 2 tests (newer-only delivery verified on B; oversized reply, dead peer, wrong protocol). Nothing is deployed.
+
 ## 0.0.22
 
 - edge: slice 2, snapshot to box B (`DESIGN-VPS-EDGE.md` sections 1.1 and 9). New `snapshot.rs`: ed25519-signed registry snapshot (`VACUUM INTO` copy, `SASNAP1` format, sequence number against rollback, SQLite integrity check, atomic rename install; B holds only the public key); 3 tests. `service.rs` `ingest` and `main.rs --snapshot-inbox <file> --snapshot-pubkey <hex>`: each reload tick installs a waiting snapshot into `registry.db` before reloading, consumes the inbox file whether accepted or refused, and keeps the registry in place on a refusal (1 test: install, replay, wrong key). The carrier that writes the inbox (HTTP over WireGuard, A serves and B polls) is NOT built. Also: `ANY` answered as RFC 8482 `HINFO`, four named tests from the real-export diff, `examples/zone_diff.rs` (refuses relative owners unless `--assume-absolute-owners`) with the real-export results in `DESIGN-VPS-EDGE.md` section 9 (export read from a path, not in the repo). Nothing of the edge is deployed.

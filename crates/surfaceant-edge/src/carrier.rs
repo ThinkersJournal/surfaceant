@@ -220,7 +220,8 @@ mod tests {
         let mut s = TcpStream::connect(a).await.unwrap();
         s.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
         let mut got = Vec::new();
-        s.read_to_end(&mut got).await.unwrap();
+        // closing with unread bytes may surface as a reset (Windows) rather than EOF
+        let _ = s.read_to_end(&mut got).await;
         assert!(got.is_empty(), "no reply to a wrong protocol");
         task.abort();
         let _ = std::fs::remove_dir_all(&d);
