@@ -55,7 +55,7 @@ fn parse_pubkey(hex: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
     ed25519_dalek::VerifyingKey::from_bytes(&arr).map_err(|e| format!("bad --snapshot-pubkey: {e}"))
 }
 
-const USAGE: &str = "usage: surfaceant-edge --origin <zone.> (--zone-file <path> | --registry <db> --edge-a <ip,..> [--edge-aaaa <ip,..>] [--ns <host,..>] [--caa <issuer,..>] [--rate <q/s>] [--burst <n>] [--reload-secs <n>] [--snapshot-inbox <file> --snapshot-pubkey <hex>]) [--bind <addr:port>]";
+const USAGE: &str = "usage: surfaceant-edge --origin <zone.> (--zone-file <path> | --registry <db> --edge-a <ip,..> [--edge-aaaa <ip,..>] [--ns <host,..>] [--caa <issuer,..>] [--rate <q/s>] [--burst <n>] [--reload-secs <n>] [--snapshot-inbox <file> --snapshot-pubkey <hex> [--snapshot-pull <addr:port>]]) [--bind <addr:port>] [--snapshot-serve <addr:port> --snapshot-file <path>]";
 
 fn registry_config(args: &[String], origin: &str, db: String) -> Result<RegistryConfig, String> {
     let edge_a = list(args, "--edge-a")?;
@@ -93,6 +93,9 @@ fn registry_config(args: &[String], origin: &str, db: String) -> Result<Registry
             (Some(inbox), Some(hex)) => Some(SnapshotIngest {
                 inbox: PathBuf::from(inbox),
                 key: parse_pubkey(&hex)?,
+                pull: arg(args, "--snapshot-pull")
+                    .map(|a| a.parse().map_err(|e| format!("bad --snapshot-pull: {e}")))
+                    .transpose()?,
             }),
             _ => return Err("--snapshot-inbox and --snapshot-pubkey go together".into()),
         },
@@ -105,6 +108,35 @@ async fn main() -> ExitCode {
     let Some(origin) = arg(&args, "--origin") else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
+    };
+    let _carrier = match (
+        arg(&args, "--snapshot-serve"),
+        arg(&args, "--snapshot-file"),
+    ) {
+        (None, None) => None,
+        (Some(a), Some(f)) => {
+            let addr: SocketAddr = match a.parse() {
+                Ok(x) => x,
+                Err(e) => {
+                    eprintln!("bad --snapshot-serve: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            match surfaceant_edge::carrier::serve(addr, PathBuf::from(f)).await {
+                Ok((bound, task)) => {
+                    eprintln!("surfaceant-edge: snapshot carrier on tcp {bound}");
+                    Some(task)
+                }
+                Err(e) => {
+                    eprintln!("surfaceant-edge: snapshot carrier: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        _ => {
+            eprintln!("--snapshot-serve and --snapshot-file go together");
+            return ExitCode::from(2);
+        }
     };
     if let Some(db) = arg(&args, "--registry") {
         let cfg = match registry_config(&args, &origin, db) {

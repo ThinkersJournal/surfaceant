@@ -47,6 +47,8 @@ pub struct SnapshotIngest {
     /// A file the carrier (WireGuard transport, a later slice) writes; consumed on success or refusal.
     pub inbox: PathBuf,
     pub key: ed25519_dalek::VerifyingKey,
+    /// Box A's carrier address to pull from each reload tick (framed TCP over WireGuard).
+    pub pull: Option<SocketAddr>,
 }
 
 /// Install a snapshot from the inbox into `cfg.db` if one is waiting. Returns the new last
@@ -131,6 +133,23 @@ pub async fn serve_registry(cfg: RegistryConfig) -> Result<Running, String> {
         tick.tick().await; // the first tick is immediate; we just loaded
         loop {
             tick.tick().await;
+            if let Some(a) = cfg.snapshot.as_ref().and_then(|i| i.pull) {
+                let inbox = cfg
+                    .snapshot
+                    .as_ref()
+                    .map(|i| i.inbox.clone())
+                    .unwrap_or_default();
+                match tokio::time::timeout(
+                    crate::carrier::STEP_TIMEOUT * 3,
+                    crate::carrier::pull(a, last_seq, &inbox),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => eprintln!("surfaceant-edge: snapshot pull from {a}: {e}"),
+                    Err(_) => eprintln!("surfaceant-edge: snapshot pull from {a}: timed out"),
+                }
+            }
             let (c, a) = (cfg.clone(), apex.clone());
             let ls = last_seq;
             match tokio::task::spawn_blocking(move || {
@@ -183,6 +202,7 @@ mod tests {
             limit: None,
             reload: Duration::from_secs(1),
             snapshot: Some(SnapshotIngest {
+                pull: None,
                 inbox: d.join("in.snap"),
                 key: k.verifying_key(),
             }),
