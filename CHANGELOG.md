@@ -2,6 +2,8 @@
 
 Versions are allocated by the portfolio PM at merge time; one version covers every crate in the workspace.
 
+## 0.1.1 - 2026-11-26 (allocated by pm-assist; CI only: portfolio workflow pinned to coderipper 467fd259, 0.48.1; no code change; not breaking)
+
 ## 0.1.0 (snapshot carrier; this release also ships the 0.0.20 to 0.0.22 entries and the breaking entry below; allocated by pm-assist 2026-11-23)
 
 - edge: the snapshot carrier (`carrier.rs`, `DESIGN-VPS-EDGE.md` section 9). Framed TCP, not HTTP: the ed25519 signature is the trust and WireGuard is only access control. A serves the current snapshot file (`--snapshot-serve <addr:port> --snapshot-file <path>`, 8 connections max, 10 s per step); B pulls each reload tick (`--snapshot-pull <addr:port>`, 30 s timeout, sends its last sequence, gets bytes only if newer, size-capped) into the existing inbox, where `ingest` verifies and installs. A client that is not ours gets the connection closed with no reply. 2 tests (newer-only delivery verified on B; oversized reply, dead peer, wrong protocol). Nothing is deployed.
